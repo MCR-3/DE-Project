@@ -2,15 +2,20 @@
 # Build every script's image in one command:
 #   docker compose -f docker-compose.scripts.yaml build
 #
-# Run a specific script. Merge with the main compose file so the script joins
+# Run a specific script by hand. Merge with the main compose file so the script joins
 # project-db's network and DB_HOST=project-db resolves:
-#   docker compose -f docker-compose.yaml -f docker-compose.scripts.yaml run --rm clustering \
-#     --n-clusters 3 --input-table raw_data --output-table clustered_data
+#   docker compose -f docker-compose.yaml -f docker-compose.scripts.yaml run --rm example-script \
+#     --n-rows 500
+# (add `--output-table example_output` and the DB_* variables to also write to project-db)
+#
+# The `image:` tag is what a DAG's DockerOperator refers to.
 
 services:
-  clustering:
-    build: ./docker_scripts/python_clustering
+  example-script:
+    build: ./docker_scripts/example_script
+    image: example-script:latest
 
   # Add each new script the same way:
   # another-script:
   #   build: ./docker_scripts/another_script
+  #   image: another-script:latest
