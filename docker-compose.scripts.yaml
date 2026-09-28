@@ -1,0 +1,16 @@
+# One-off script containers (each folder under docker_scripts/ gets its own image).
+# Build every script's image in one command:
+#   docker compose -f docker-compose.scripts.yaml build
+#
+# Run a specific script. Merge with the main compose file so the script joins
+# project-db's network and DB_HOST=project-db resolves:
+#   docker compose -f docker-compose.yaml -f docker-compose.scripts.yaml run --rm clustering \
+#     --n-clusters 3 --input-table raw_data --output-table clustered_data
+
+services:
+  clustering:
+    build: ./docker_scripts/python_clustering
+
+  # Add each new script the same way:
+  # another-script:
+  #   build: ./docker_scripts/another_script
