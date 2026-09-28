@@ -200,13 +200,13 @@ with DAG(
 
     exec_intavolature_query = SQLExecuteQueryOperator(
         task_id="exec_intavolature_query",
-        conn_id="postgres_default",
+        conn_id="project-db",
         sql="intavolature_inserts.sql",
         autocommit=True,
     )
     exec_composer_query = SQLExecuteQueryOperator(
         task_id="exec_composer_query",
-        conn_id="postgres_default",
+        conn_id="project-db",
         sql="composer_inserts.sql",
         autocommit=True,
     )
