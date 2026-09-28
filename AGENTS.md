@@ -1,0 +1,3 @@
+# AGENTS.md
+
+Agent instructions for this repo live in [CLAUDE.md](./CLAUDE.md). Read that file.
