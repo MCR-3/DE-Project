@@ -127,9 +127,17 @@ DAGs are created paused. In the UI, un-pause the DAG you want and trigger it (`e
 
 ### DAG 3: Wikipedia scraper
 
-`dag_3` (displayed as "DAG 3") runs `docker_scripts/wikipedia_scraper` in its own container. It fetches random English Wikipedia articles and saves each one's text in `data/wikipedia/<title>.txt`; the first line of a file is the article's URL. It does not use `project-db`.
+`dag_3` (displayed as "DAG 3") runs `docker_scripts/wikipedia_scraper` in its own container. It fetches random English Wikipedia articles and saves them all in one file per run, `data/wikipedia/wikipedia_<UTC timestamp>.json` (e.g. `wikipedia_20261102T161147Z.json`). It does not use `project-db`.
 
-- Parameter `n_pages` (default 20): number of articles to save. Stubs (text shorter than 1500 characters) are skipped and do not count, and articles already present in the folder are skipped too, so successive runs accumulate files.
+```json
+{
+  "fetched_at": "2026-11-02T16:11:47Z",
+  "pages": [{"title": "...", "url": "https://en.wikipedia.org/wiki/...", "text": "plain text of the article"}]
+}
+```
+
+- Parameter `n_pages` (default 20): number of articles to save. Stubs (text shorter than 1500 characters) are skipped and do not count. Articles are not de-duplicated between runs, only within a run.
+- Pages are appended to the file as they are fetched (`*.json.part` while running). If the run stops before `n_pages`, the task fails and what was fetched is kept in a valid `wikipedia_<timestamp>.partial.json`; with no page at all, no file is written.
 - Needs `HOST_DATA_DIR` in `.env` (see [step 1](#1-configure-the-env-file)) and the `wikipedia-scraper` image built (see [step 5](#5-build-the-example-script-image)).
 - The DAG's id and display name are defined in one file, `dags/dag_names.py`.
 
