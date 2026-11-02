@@ -17,12 +17,16 @@ These override any default attribution behaviour of the agent or its tooling.
 .
 ├── dags/                        Airflow DAGs, mounted at /opt/airflow/dags
 │   ├── example_dag.py           DAG `second_dag_stub`: spreadsheet -> CSV -> filter -> split -> SQL inserts
-│   └── example_docker.py        DAG `example_docker_script`: runs docker_scripts/example_script via DockerOperator
+│   ├── example_docker.py        DAG `example_docker_script`: runs docker_scripts/example_script via DockerOperator
+│   ├── dag_3.py                 DAG `dag_3` ("DAG 3"): runs docker_scripts/wikipedia_scraper via DockerOperator
+│   └── dag_names.py             The single place where DAG ids / display names are defined (DAG 3 imports from it)
 ├── docker_scripts/
-│   └── example_script/          Template for a script that runs OUTSIDE Airflow's container (own image)
-│       ├── main.py              argparse + DB_* env vars + logging + exit codes, no real logic
-│       ├── requirements.txt     the script's own dependencies, independent from Airflow's
-│       └── Dockerfile
+│   ├── example_script/          Template for a script that runs OUTSIDE Airflow's container (own image)
+│   │   ├── main.py              argparse + DB_* env vars + logging + exit codes, no real logic
+│   │   ├── requirements.txt     the script's own dependencies, independent from Airflow's
+│   │   └── Dockerfile
+│   └── wikipedia_scraper/       Fetches random Wikipedia articles into data/wikipedia/*.txt (URL on the first line); no DB
+│       └── main.py, requirements.txt (requests, beautifulsoup4), Dockerfile
 ├── Dockerfile, requirements.txt Custom Airflow image (see Dependencies)
 ├── docker-compose.yaml          The Airflow stack + project-db
 ├── docker-compose.scripts.yaml  One service per docker_scripts/* image (build, and run by hand)
@@ -53,6 +57,8 @@ These override any default attribution behaviour of the agent or its tooling.
 - DB credentials through `environment` / `private_environment`, taken from the Airflow connection `project-db`;
 - the Docker network through `DOCKER_NETWORK` (from `.env`), so `project-db` resolves inside the launched container.
 
+Bind mounts are resolved by the **host's** dockerd, not by the worker: a path like `/opt/airflow/data` means nothing to it. `dag_3` therefore mounts `HOST_DATA_DIR` (absolute host path of `data/`, set in `.env`) at `/data` in the scraper container, and runs it as `AIRFLOW_UID` so the files match Airflow's ownership.
+
 The task succeeds or fails on the container's exit code (the script uses 0 ok / 1 failure / 2 bad config).
 
 ## Dependencies
@@ -60,7 +66,7 @@ The task succeeds or fails on the container's exit code (the script uses 0 ok / 
 - **Host:** Docker (Compose v2) only, with at least 4 GB RAM and 2 CPUs for Docker. No local Python setup is needed; editor warnings such as "sqlalchemy could not be resolved" are expected, since the packages only exist inside the images.
 - **Airflow image:** `apache/airflow:3.3.1` plus `requirements.txt` (`pandas`, `psycopg2-binary`, `sqlalchemy`, `apache-airflow-providers-docker`, `xlsx2csv`, whose CLI is called from a `BashOperator`). The `Dockerfile` installs them with `apache-airflow==${AIRFLOW_VERSION}` to keep Airflow's own version pinned. Rebuild with `docker compose up -d --build` after editing either file.
 - **Script images:** each `docker_scripts/<name>/requirements.txt` is separate and must never be merged into the root one. `example_script` uses `numpy`, `pandas`, `psycopg2-binary`, `sqlalchemy` on `python:3.12-slim`.
-- **Configuration (`.env`, copied from `.env.example`):** `AIRFLOW_UID`, `FERNET_KEY` (required), `DOCKER_NETWORK` (needed for scripts to reach `project-db`; usually `<folder-name>_default`, see `docker network ls`), optional `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD`.
+- **Configuration (`.env`, copied from `.env.example`):** `AIRFLOW_UID`, `FERNET_KEY` (required), `DOCKER_NETWORK` (needed for scripts to reach `project-db`; usually `<folder-name>_default`, see `docker network ls`), `HOST_DATA_DIR` (required by `dag_3`, see above), optional `WIKI_USER_AGENT`, optional `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD`.
 - **Airflow connection (created by hand in the UI, not in code):** `project-db` (host `project-db`, schema/login `project`, password `devpassword`, port 5432), used by every DAG that touches data. There is deliberately no connection to Airflow's metadata DB. Exact values are in the README, step 4.
 
 ## How to run
@@ -96,6 +102,7 @@ There is no automated test suite and no CI. Verify changes by running them:
     example-script --n-rows 500 --output-table example_output
   docker compose exec project-db psql -U project project -c "select * from example_output"
   ```
+- **The Wikipedia scraper on its own** (needs network access, no Airflow): `docker run --rm -v "$PWD/data:/data" wikipedia-scraper:latest --n-pages 3 --output-dir /data/wikipedia` writes 3 `.txt` files; `--n-pages 0` logs an error and exits 2.
 - **A DAG:** with the stack up, look for parse errors in the UI or in `docker compose logs airflow-dag-processor`, then trigger the DAG and read the task logs in the UI. The `project-db` connection must exist before `example_docker.py` parses, because it calls `Connection.get("project-db")` at the top level. A quick parse check without the stack: `docker compose run --rm --no-deps --entrypoint python airflow-scheduler dags/example_dag.py` (no output besides deprecation warnings means it imports).
 
 ## Conventions
