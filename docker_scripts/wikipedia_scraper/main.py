@@ -6,7 +6,8 @@ One run produces one file, `wikipedia_<UTC timestamp>.json`:
     {"fetched_at": "2026-11-02T16:11:47Z",
      "pages": [{"title": "...", "url": "https://en.wikipedia.org/wiki/...", "text": "..."}, ...]}
 
-`text` is the article's plain text (infobox and table contents included). Pages are appended to
+`text` is the article's plain text on a single line, with no line breaks (infobox and table
+contents included). Pages are appended to
 the file as they are fetched; while the run is going the file is named `*.json.part`. It is
 renamed to `*.json` when all the requested articles are saved, or to `*.partial.json` (still
 valid JSON) if the run stops early.
@@ -45,6 +46,10 @@ DEFAULT_USER_AGENT = "DEProjectWikiScraper/1.0 (https://github.com/MCR-3/DE-Proj
 TITLES_PER_BATCH = 50
 MAX_TITLES_PER_PAGE = 50  # give up after drawing n_pages * this many titles without reaching n_pages
 MAX_CONSECUTIVE_ERRORS = 10
+BLOCK_TAGS = [
+    "p", "div", "br", "blockquote", "pre", "ul", "ol", "li", "dl", "dt", "dd",
+    "table", "caption", "tr", "th", "td", "h1", "h2", "h3", "h4", "h5", "h6",
+]
 
 
 def parse_args(argv=None):
@@ -124,8 +129,12 @@ def html_to_text(html):
         tag.decompose()
     for tag in soup.select(".mw-editsection, .reference, .navbox, .mw-empty-elt"):
         tag.decompose()
-    text = soup.get_text(separator="\n")
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+    # Inline tags join as in the page; block-level ones get a space around them so that
+    # neighbouring paragraphs, list items and table cells do not run together.
+    for tag in soup.find_all(BLOCK_TAGS):
+        tag.insert_before(" ")
+        tag.insert_after(" ")
+    return re.sub(r"\s+", " ", soup.get_text()).strip()
 
 
 def page_url(title):
