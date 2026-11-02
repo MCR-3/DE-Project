@@ -25,7 +25,7 @@ These override any default attribution behaviour of the agent or its tooling.
 │   │   ├── main.py              argparse + DB_* env vars + logging + exit codes, no real logic
 │   │   ├── requirements.txt     the script's own dependencies, independent from Airflow's
 │   │   └── Dockerfile
-│   └── wikipedia_scraper/       Fetches random Wikipedia articles into data/wikipedia/*.txt (URL on the first line); no DB
+│   └── wikipedia_scraper/       Fetches random Wikipedia articles into one data/wikipedia/wikipedia_<UTC timestamp>.json per run ({fetched_at, pages:[{title,url,text}]}); no DB
 │       └── main.py, requirements.txt (requests, beautifulsoup4), Dockerfile
 ├── Dockerfile, requirements.txt Custom Airflow image (see Dependencies)
 ├── docker-compose.yaml          The Airflow stack + project-db
@@ -102,7 +102,7 @@ There is no automated test suite and no CI. Verify changes by running them:
     example-script --n-rows 500 --output-table example_output
   docker compose exec project-db psql -U project project -c "select * from example_output"
   ```
-- **The Wikipedia scraper on its own** (needs network access, no Airflow): `docker run --rm -v "$PWD/data:/data" wikipedia-scraper:latest --n-pages 3 --output-dir /data/wikipedia` writes 3 `.txt` files; `--n-pages 0` logs an error and exits 2.
+- **The Wikipedia scraper on its own** (needs network access, no Airflow): `docker run --rm -v "$PWD/data:/data" wikipedia-scraper:latest --n-pages 3 --output-dir /data/wikipedia` writes one `wikipedia_<timestamp>.json` with 3 pages; `--n-pages 0` logs an error and exits 2. A run that stops early leaves a valid `*.partial.json` and exits 1.
 - **A DAG:** with the stack up, look for parse errors in the UI or in `docker compose logs airflow-dag-processor`, then trigger the DAG and read the task logs in the UI. The `project-db` connection must exist before `example_docker.py` parses, because it calls `Connection.get("project-db")` at the top level. A quick parse check without the stack: `docker compose run --rm --no-deps --entrypoint python airflow-scheduler dags/example_dag.py` (no output besides deprecation warnings means it imports).
 
 ## Conventions
