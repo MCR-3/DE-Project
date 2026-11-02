@@ -1,21 +1,31 @@
-"""Fetch random Wikipedia articles and store each one's text in a .txt file.
+"""Fetch random Wikipedia articles and store them in one timestamped JSON file.
 
 Meant to run in its own container, launched by the DAG 3 DockerOperator (see dags/dag_3.py).
-Each file is named after the article, its first line is the article's URL, then a blank line,
-then the article text (infobox and table contents included).
+One run produces one file, `wikipedia_<UTC timestamp>.json`:
+
+    {"fetched_at": "2026-11-02T16:11:47Z",
+     "pages": [{"title": "...", "url": "https://en.wikipedia.org/wiki/...", "text": "..."}, ...]}
+
+`text` is the article's plain text (infobox and table contents included). Pages are appended to
+the file as they are fetched; while the run is going the file is named `*.json.part`. It is
+renamed to `*.json` when all the requested articles are saved, or to `*.partial.json` (still
+valid JSON) if the run stops early.
 
   * Command-line arguments: filled in by the DAG through `DockerOperator(command=[...])`.
   * Configuration from the environment: `WIKI_USER_AGENT` (optional) overrides the User-Agent.
-  * Output: files written under `--output-dir`, which the DAG bind-mounts from the host's data/ folder.
+  * Output: the file is written under `--output-dir`, which the DAG bind-mounts from the host's data/ folder.
   * Exit code: 0 ok, 1 failure, 2 bad config (non-zero makes the Airflow task fail).
 """
 
 import argparse
+import json
 import logging
 import os
 import re
 import sys
+import textwrap
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -35,11 +45,10 @@ DEFAULT_USER_AGENT = "DEProjectWikiScraper/1.0 (https://github.com/MCR-3/DE-Proj
 TITLES_PER_BATCH = 50
 MAX_TITLES_PER_PAGE = 50  # give up after drawing n_pages * this many titles without reaching n_pages
 MAX_CONSECUTIVE_ERRORS = 10
-MAX_FILENAME_CHARS = 150
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="Save random Wikipedia articles as .txt files.")
+    parser = argparse.ArgumentParser(description="Save random Wikipedia articles in a timestamped JSON file.")
     parser.add_argument("--n-pages", type=int, default=20, help="number of articles to save")
     parser.add_argument(
         "--min-chars",
@@ -47,14 +56,28 @@ def parse_args(argv=None):
         default=1500,
         help="skip articles whose text is shorter than this (stubs)",
     )
-    parser.add_argument("--output-dir", default="/data/wikipedia", help="folder for the .txt files")
+    parser.add_argument("--output-dir", default="/data/wikipedia", help="folder for the JSON file")
     return parser.parse_args(argv)
 
 
-def safe_name(title):
-    """File name for a title: no characters forbidden by Windows, no trailing dot/space."""
-    name = re.sub(r'[\\/:*?"<>|]', "_", title)
-    return name[:MAX_FILENAME_CHARS].rstrip(" .")
+class PagesWriter:
+    """Appends pages to a JSON file as they come, so a run that stops early keeps what it fetched."""
+
+    def __init__(self, path, fetched_at):
+        self.count = 0
+        self._file = path.open("w", encoding="utf-8")
+        self._file.write(f'{{\n  "fetched_at": {json.dumps(fetched_at)},\n  "pages": [')
+
+    def add(self, title, url, text):
+        page = json.dumps({"title": title, "url": url, "text": text}, ensure_ascii=False, indent=2)
+        self._file.write(("," if self.count else "") + "\n" + textwrap.indent(page, "    "))
+        self._file.flush()
+        self.count += 1
+
+    def close(self):
+        if not self._file.closed:
+            self._file.write("\n  ]\n}\n")
+            self._file.close()
 
 
 def get_random_titles(session, n):
@@ -109,32 +132,20 @@ def page_url(title):
     return PAGE_URL + quote(title.replace(" ", "_"), safe="_()',!*:@~$&+=;-.")
 
 
-def write_article(path, url, text):
-    # Write to a temp file first so an interrupted run never leaves a half-written article.
-    tmp = path.with_suffix(".txt.tmp")
-    tmp.write_text(f"{url}\n\n{text}\n", encoding="utf-8")
-    tmp.replace(path)
-
-
-def scrape(session, n_pages, min_chars, out_dir):
-    """Save n_pages articles into out_dir; returns how many were saved."""
-    saved = examined = errors = 0
+def scrape(session, n_pages, min_chars, writer):
+    """Add up to n_pages articles to writer."""
+    examined = errors = 0
     budget = n_pages * MAX_TITLES_PER_PAGE
     seen = set()
 
-    while saved < n_pages and examined < budget:
+    while writer.count < n_pages and examined < budget:
         for title in get_random_titles(session, TITLES_PER_BATCH):
-            if saved >= n_pages or examined >= budget:
+            if writer.count >= n_pages or examined >= budget:
                 break
             if title in seen:
                 continue
             seen.add(title)
             examined += 1
-
-            path = out_dir / f"{safe_name(title)}.txt"
-            if path.exists():
-                log.info("already saved: %s", title)
-                continue
 
             try:
                 canonical, html = fetch_page(session, title)
@@ -153,12 +164,9 @@ def scrape(session, n_pages, min_chars, out_dir):
                 log.info("skipped stub: %s", title)
                 continue
 
-            write_article(path, page_url(canonical), text)
-            saved += 1
-            log.info("[%d/%d] %s (%d chars)", saved, n_pages, title, len(text))
+            writer.add(canonical, page_url(canonical), text)
+            log.info("[%d/%d] %s (%d chars)", writer.count, n_pages, canonical, len(text))
             time.sleep(0.05)
-
-    return saved
 
 
 def main(argv=None):
@@ -171,25 +179,39 @@ def main(argv=None):
     if args.n_pages < 1:
         log.error("--n-pages must be at least 1")
         return EXIT_BAD_CONFIG
+
+    started = datetime.now(timezone.utc).replace(microsecond=0)
     out_dir = Path(args.output_dir)
+    stem = f"wikipedia_{started.strftime('%Y%m%dT%H%M%SZ')}"
+    part = out_dir / f"{stem}.json.part"
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
+        writer = PagesWriter(part, started.strftime("%Y-%m-%dT%H:%M:%SZ"))
     except OSError as e:
-        log.error("cannot create output dir %s: %s", out_dir, e)
+        log.error("cannot write in output dir %s: %s", out_dir, e)
         return EXIT_BAD_CONFIG
 
     try:
         with requests.Session() as session:
             session.headers["User-Agent"] = os.environ.get("WIKI_USER_AGENT") or DEFAULT_USER_AGENT
-            saved = scrape(session, args.n_pages, args.min_chars, out_dir)
+            scrape(session, args.n_pages, args.min_chars, writer)
     except Exception:
         log.exception("script failed")
-        return EXIT_FAILURE
+    finally:
+        writer.close()
 
-    if saved < args.n_pages:
-        log.error("only %d of %d articles saved after %d titles drawn", saved, args.n_pages, args.n_pages * MAX_TITLES_PER_PAGE)
+    if writer.count == 0:
+        part.unlink()
+        log.error("no article saved, no file written")
         return EXIT_FAILURE
-    log.info("done: %d articles saved in %s", saved, out_dir)
+    if writer.count < args.n_pages:
+        partial = out_dir / f"{stem}.partial.json"
+        part.replace(partial)
+        log.error("only %d of %d articles saved, kept in %s", writer.count, args.n_pages, partial)
+        return EXIT_FAILURE
+    final = out_dir / f"{stem}.json"
+    part.replace(final)
+    log.info("done: %d articles saved in %s", writer.count, final)
     return EXIT_OK
 
 
