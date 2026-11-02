@@ -14,6 +14,7 @@ The DAGs in `dags/` and the script in `docker_scripts/` are **examples** and tem
   - [4. Configure the project database connection in the Airflow UI](#4-configure-the-project-database-connection-in-the-airflow-ui)
   - [5. Build the example script image](#5-build-the-example-script-image)
   - [6. Run a DAG](#6-run-a-dag)
+  - [DAG 3: Wikipedia scraper](#dag-3-wikipedia-scraper)
 - [Writing your own script](#writing-your-own-script)
 
 ## Services
@@ -53,7 +54,9 @@ Then fill in the values:
 
 - `DOCKER_NETWORK`: network joined by the containers that `DockerOperator` launches. Empty by default; see [step 5](#5-build-the-example-script-image).
 
-Optional variables: `_AIRFLOW_WWW_USER_USERNAME` and `_AIRFLOW_WWW_USER_PASSWORD` change the admin account created at init (both default to `airflow`).
+- `HOST_DATA_DIR`: absolute path of this repository's `data/` folder **on the host** (e.g. `C:/Users/me/GitHub/DE-Project/data`). Required by DAG 3: containers started through `docker.sock` are created by the host's Docker daemon, so their bind mounts need a host path, not one inside the Airflow containers.
+
+Optional variables: `WIKI_USER_AGENT` is the User-Agent sent by DAG 3's scraper (Wikimedia asks for a contact, e.g. `MyScraper/1.0 (you@example.com)`; by default it points at this repository). `_AIRFLOW_WWW_USER_USERNAME` and `_AIRFLOW_WWW_USER_PASSWORD` change the admin account created at init (both default to `airflow`).
 
 ### 2. Initialize Airflow
 
@@ -110,7 +113,7 @@ Notes:
 
 ### 5. Build the example script image
 
-The `example_docker_script` DAG launches `docker_scripts/example_script` in its own container through `DockerOperator`, so the image must exist locally. Build every image declared in `docker-compose.scripts.yaml`:
+The `example_docker_script` DAG launches `docker_scripts/example_script` (and `dag_3` launches `docker_scripts/wikipedia_scraper`) in its own container through `DockerOperator`, so the images must exist locally. Build every image declared in `docker-compose.scripts.yaml`:
 
 ```bash
 docker compose -f docker-compose.scripts.yaml build
@@ -121,6 +124,20 @@ The DAG reads the network the launched container joins from the `DOCKER_NETWORK`
 ### 6. Run a DAG
 
 DAGs are created paused. In the UI, un-pause the DAG you want and trigger it (`example_docker_script` accepts an `n_rows` parameter). It runs the example script, which logs a summary of random data and writes it to an `example_output` table in `project-db`.
+
+### DAG 3: Wikipedia scraper
+
+`dag_3` (displayed as "DAG 3") runs `docker_scripts/wikipedia_scraper` in its own container. It fetches random English Wikipedia articles and saves each one's text in `data/wikipedia/<title>.txt`; the first line of a file is the article's URL. It does not use `project-db`.
+
+- Parameter `n_pages` (default 20): number of articles to save. Stubs (text shorter than 1500 characters) are skipped and do not count, and articles already present in the folder are skipped too, so successive runs accumulate files.
+- Needs `HOST_DATA_DIR` in `.env` (see [step 1](#1-configure-the-env-file)) and the `wikipedia-scraper` image built (see [step 5](#5-build-the-example-script-image)).
+- The DAG's id and display name are defined in one file, `dags/dag_names.py`.
+
+To run the scraper by hand, outside of Airflow:
+
+```bash
+docker run --rm -v "$PWD/data:/data" wikipedia-scraper:latest --n-pages 5 --output-dir /data/wikipedia
+```
 
 ## Writing your own script
 
