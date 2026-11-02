@@ -1,4 +1,4 @@
-"""DAG 3: fetch random Wikipedia articles and store their text as .txt files in data/wikipedia/.
+"""DAG 3: fetch random Wikipedia articles and store them in one timestamped JSON file in data/wikipedia/.
 
 Runs docker_scripts/wikipedia_scraper in its own container with DockerOperator. The DAG's name
 lives in dags/dag_names.py.
