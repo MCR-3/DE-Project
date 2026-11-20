@@ -19,6 +19,10 @@ services:
     build: ./docker_scripts/fsa_scraper
     image: fsa-scraper:latest
 
+  ofsted-scraper:
+    build: ./docker_scripts/ofsted_scraper
+    image: ofsted-scraper:latest
+
   mongo-loader:
     build: ./docker_scripts/mongo_loader
     image: mongo-loader:latest
