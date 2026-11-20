@@ -15,10 +15,6 @@ services:
     build: ./docker_scripts/example_script
     image: example-script:latest
 
-  wikipedia-scraper:
-    build: ./docker_scripts/wikipedia_scraper
-    image: wikipedia-scraper:latest
-
   # Add each new script the same way:
   # another-script:
   #   build: ./docker_scripts/another_script
