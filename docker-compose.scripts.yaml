@@ -15,6 +15,10 @@ services:
     build: ./docker_scripts/example_script
     image: example-script:latest
 
+  fsa-scraper:
+    build: ./docker_scripts/fsa_scraper
+    image: fsa-scraper:latest
+
   mongo-loader:
     build: ./docker_scripts/mongo_loader
     image: mongo-loader:latest
