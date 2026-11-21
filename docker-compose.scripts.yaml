@@ -15,6 +15,18 @@ services:
     build: ./docker_scripts/example_script
     image: example-script:latest
 
+  fsa-scraper:
+    build: ./docker_scripts/fsa_scraper
+    image: fsa-scraper:latest
+
+  ofsted-scraper:
+    build: ./docker_scripts/ofsted_scraper
+    image: ofsted-scraper:latest
+
+  mongo-loader:
+    build: ./docker_scripts/mongo_loader
+    image: mongo-loader:latest
+
   # Add each new script the same way:
   # another-script:
   #   build: ./docker_scripts/another_script
