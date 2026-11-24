@@ -1,19 +1,22 @@
-"""FSA landing: fetch the food hygiene ratings of a few English local authorities, then store them raw in MongoDB.
+"""FSA landing: fetch the food hygiene ratings of every English local authority, then store them raw in MongoDB.
 
   1. scrape_fsa: docker_scripts/fsa_scraper saves the FHRS API responses, as received, in
-     data/landing/fsa/<run>/ (authorities, business types, establishments, and a manifest.json).
+     data/landing/fsa/<run>/ (authorities, business types, ratings, score descriptors,
+     establishments, and a manifest.json).
   2. load_into_mongo: docker_scripts/mongo_loader appends them to the raw_fsa_* collections of
      project-mongo, wrapped with the source, the run id and the load timestamp.
 
-Landing only: nothing is cleaned or typed here. Runs daily at 02:00 UTC (the FSA asks for bulk
-retrievals between 01:00 and 06:00). The `la_ids` parameter is a comma-separated list of FSA
-LocalAuthorityId values, or `all` for every English authority. Both tasks run in their own
+Landing only: nothing is cleaned, typed or filtered here (see docs/adr/0001). Runs weekly, on
+Mondays at 02:00 UTC (the FSA asks for bulk retrievals between 01:00 and 06:00); a full run is
+about 500,000 establishments and takes one to two hours. For a test, trigger it by hand with
+`sample` ticked: only the authorities of `la_ids` (comma-separated FSA LocalAuthorityId values)
+are fetched, and the run is marked as a sample run in MongoDB. Both tasks run in their own
 container with DockerOperator. The DAG's name lives in dags/dag_names.py.
 """
 
 import os
 from datetime import datetime, timedelta
-from airflow.sdk import DAG, Connection
+from airflow.sdk import DAG, Connection, Param
 from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 
@@ -34,11 +37,25 @@ with DAG(
     dag_id=FSA_DAG_ID,
     dag_display_name=FSA_DAG_DISPLAY_NAME,
     start_date=datetime(2026, 11, 1),
-    schedule="0 2 * * *",
+    schedule="0 2 * * 1",
     catchup=False,
     default_args={"retries": 2, "retry_delay": timedelta(minutes=5)},
-    # Default extract: Isles of Scilly (136 establishments), Bath and North East Somerset (~1,800), Leeds (~7,700).
-    params={"la_ids": "321,326,397"},
+    params={
+        # Unticked for the scheduled runs: a full run, every English authority.
+        "sample": Param(
+            False,
+            type="boolean",
+            title="Sample run",
+            description="Tick for a test run on the authorities of la_ids only. Unticked: a full run, every English authority.",
+        ),
+        # Default sample: Isles of Scilly (136 establishments), Bath and North East Somerset (~1,800), Leeds (~7,700).
+        "la_ids": Param(
+            "321,326,397",
+            type="string",
+            title="Local authorities of a sample run",
+            description="Comma-separated FSA LocalAuthorityId values. Only used when 'Sample run' is ticked.",
+        ),
+    },
     tags=["landing", "fsa"],
 ):
 
@@ -57,6 +74,7 @@ with DAG(
             LANDING_DIR,
             "--run-id",
             RUN_ID,
+            "{{ '--sample' if params.sample else '--no-sample' }}",
             "--la-ids",
             "{{ params.la_ids }}",
         ],
