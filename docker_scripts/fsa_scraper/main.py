@@ -6,6 +6,8 @@ Nothing is parsed or cleaned: every API response is written to disk exactly as r
     <output-dir>/<run-id>/
         authorities.json                     GET /Authorities (all UK local authorities)
         business_types.json                  GET /BusinessTypes
+        ratings.json                         GET /Ratings (every possible rating, FHRS and FHIS)
+        score_descriptors.json               GET /ScoreDescriptors (the wording of every score value)
         establishments/la_<id>/page_0001.json   GET /Establishments?localAuthorityId=<id>&pageNumber=1 ...
         manifest.json                        what was fetched, read by docker_scripts/mongo_loader
 
@@ -208,6 +210,14 @@ def main(argv=None):
                 client, run_dir, "/BusinessTypes", "business_types.json",
                 "business_types", "raw_fsa_business_types", "businessTypes", "BusinessTypeId",
             )
+            ratings = land_reference(
+                client, run_dir, "/Ratings", "ratings.json",
+                "ratings", "raw_fsa_ratings", "ratings", "ratingId",
+            )
+            score_descriptors = land_reference(
+                client, run_dir, "/ScoreDescriptors", "score_descriptors.json",
+                "score_descriptors", "raw_fsa_score_descriptors", "scoreDescriptors", "Id",
+            )
             authority_list = json.loads((run_dir / "authorities.json").read_text(encoding="utf-8"))["authorities"]
             try:
                 selected = select_authorities(authority_list, args.la_ids)
@@ -236,6 +246,8 @@ def main(argv=None):
         "datasets": [
             authorities,
             business_types,
+            ratings,
+            score_descriptors,
             {
                 "name": "establishments",
                 "collection": "raw_fsa_establishments",
