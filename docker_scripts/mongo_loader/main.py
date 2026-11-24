@@ -4,7 +4,7 @@ Meant to run in its own container, launched by a landing DAG (see dags/fsa_landi
 dags/ofsted_landing.py). It knows nothing about the sources: everything it needs is in the
 `manifest.json` that the scraper writes last in the run folder:
 
-    {"source": "fsa", "run_id": "...",
+    {"source": "fsa", "run_id": "...", "sample": false,
      "datasets": [{"name": "establishments", "collection": "raw_fsa_establishments",
                    "format": "json", "records_path": "establishments", "key_field": "FHRSID",
                    "extract_date": "2026-11-20", "files": ["establishments/la_326/page_0001.json", ...]},
@@ -15,8 +15,13 @@ dags/ofsted_landing.py). It knows nothing about the sources: everything it needs
 Each source record becomes one document, appended to the dataset's collection. The record is kept
 untouched under `payload` (a CSV row is a dict of strings; nothing is typed or cleaned here):
 
-    {"source": "fsa", "dataset": "establishments", "run_id": "...", "ingested_at": <UTC datetime>,
-     "extract_date": "2026-11-20", "source_key": "1733057", "payload": {...as received...}}
+    {"source": "fsa", "dataset": "establishments", "run_id": "...", "sample": false,
+     "ingested_at": <UTC datetime>, "extract_date": "2026-11-20", "source_key": "1733057",
+     "payload": {...as received...}}
+
+`sample` (required in the manifest) tells a sample run, a test on a subset of the source, from a
+full run, so that staging can leave the sample runs out. A manifest without it is refused rather
+than taken for a full run.
 
 The loading is append-only: a run adds its documents and never touches the previous runs, which is
 how the rating history builds up. A unique index on (run_id, source_key) makes a retry safe: the
@@ -75,9 +80,11 @@ def read_manifest(run_dir):
     if not path.is_file():
         raise ValueError(f"{path} not found: the scraper did not finish this run")
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    for field in ("source", "run_id", "datasets"):
+    for field in ("source", "run_id", "sample", "datasets"):
         if field not in manifest:
             raise ValueError(f"{path} has no {field!r}")
+    if not isinstance(manifest["sample"], bool):
+        raise ValueError(f"{path}: 'sample' must be true or false, got {manifest['sample']!r}")
     for dataset in manifest["datasets"]:
         for field in ("name", "collection", "format", "key_field", "files"):
             if field not in dataset:
@@ -107,6 +114,7 @@ def envelope(manifest, dataset, ingested_at, record):
         "source": manifest["source"],
         "dataset": dataset["name"],
         "run_id": manifest["run_id"],
+        "sample": manifest["sample"],
         "ingested_at": ingested_at,
         "extract_date": dataset.get("extract_date"),
         "source_key": str(record[dataset["key_field"]]),
