@@ -13,8 +13,10 @@ Nothing is parsed or cleaned: every API response is written to disk exactly as r
 
 `manifest.json` is written last: a run folder without it is an unfinished run and is not loaded.
 
-Only English authorities are accepted (the project is limited to England): `--la-ids` is a
-comma-separated list of FSA `LocalAuthorityId` values, or `all` for every English authority.
+A run is either a full run (`--no-sample`: every English authority, about 500,000 establishments)
+or a sample run (`--sample`, the default when run by hand: only the authorities of `--la-ids`, a
+comma-separated list of FSA `LocalAuthorityId` values). Only English authorities are accepted (the
+project is limited to England). The manifest records which one it was in its `sample` field.
 
   * Command-line arguments: filled in by the DAG through `DockerOperator(command=[...])`.
   * Configuration from the environment: `SCRAPER_USER_AGENT` (optional) overrides the User-Agent.
@@ -42,7 +44,7 @@ EXIT_BAD_CONFIG = 2
 
 API_URL = "https://api.ratings.food.gov.uk"
 DEFAULT_USER_AGENT = "DEProjectFsaScraper/1.0 (https://github.com/MCR-3/DE-Project)"
-# A small England extract: the Isles of Scilly (tiny), Bath and North East Somerset (medium), Leeds (large).
+# The default sample: the Isles of Scilly (tiny), Bath and North East Somerset (medium), Leeds (large).
 DEFAULT_LA_IDS = "321,326,397"
 MAX_PAGE_SIZE = 200  # the FSA rate-limits larger pages (HTTP 429)
 NON_ENGLISH_REGIONS = {"Scotland", "Wales", "Northern Ireland"}
@@ -57,10 +59,16 @@ def parse_args(argv=None):
         help="name of this run's folder (default: UTC timestamp, e.g. 20261120T090000Z)",
     )
     parser.add_argument(
+        "--sample",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="--sample (default): a sample run, only the authorities of --la-ids; "
+        "--no-sample: a full run, every English authority (--la-ids is ignored)",
+    )
+    parser.add_argument(
         "--la-ids",
         default=DEFAULT_LA_IDS,
-        help="comma-separated FSA LocalAuthorityId values, or 'all' for every English authority "
-        f"(default: {DEFAULT_LA_IDS})",
+        help=f"comma-separated FSA LocalAuthorityId values of a sample run (default: {DEFAULT_LA_IDS})",
     )
     parser.add_argument("--page-size", type=int, default=MAX_PAGE_SIZE, help=f"establishments per page, 1-{MAX_PAGE_SIZE}")
     parser.add_argument("--sleep", type=float, default=0.5, help="seconds to wait between two API calls")
@@ -111,18 +119,22 @@ def extract_date(body):
     return value[:10] if value else None
 
 
-def select_authorities(authorities, la_ids):
-    """The list of LocalAuthorityId to fetch. Raises ValueError for unknown or non-English ones."""
+def select_authorities(authorities, sample, la_ids):
+    """The authorities to fetch: every English one for a full run, those of `la_ids` for a sample run.
+
+    Raises ValueError for unknown or non-English ones.
+    """
     english = {a["LocalAuthorityId"]: a for a in authorities if a.get("RegionName") not in NON_ENGLISH_REGIONS}
     known = {a["LocalAuthorityId"]: a for a in authorities}
-    if la_ids.strip().lower() == "all":
+    if not sample:
         return [english[i] for i in sorted(english)]
     selected = []
     for raw in la_ids.split(","):
         try:
             la_id = int(raw)
         except ValueError:
-            raise ValueError(f"not a LocalAuthorityId: {raw!r}") from None
+            hint = " (for every English authority, make a full run with --no-sample)" if raw.strip().lower() == "all" else ""
+            raise ValueError(f"not a LocalAuthorityId: {raw!r}{hint}") from None
         if la_id not in known:
             raise ValueError(f"unknown LocalAuthorityId {la_id}")
         if la_id not in english:
@@ -220,7 +232,7 @@ def main(argv=None):
             )
             authority_list = json.loads((run_dir / "authorities.json").read_text(encoding="utf-8"))["authorities"]
             try:
-                selected = select_authorities(authority_list, args.la_ids)
+                selected = select_authorities(authority_list, args.sample, args.la_ids)
             except ValueError as e:
                 log.error("bad --la-ids: %s", e)
                 return EXIT_BAD_CONFIG
@@ -228,7 +240,8 @@ def main(argv=None):
                 log.error("no authority selected")
                 return EXIT_BAD_CONFIG
 
-            log.info("fetching %d authorities, page size %d", len(selected), args.page_size)
+            log.info("%s run: fetching %d authorities, page size %d",
+                     "sample" if args.sample else "full", len(selected), args.page_size)
             files, extracted = [], None
             for authority in selected:
                 authority_files, authority_extract = land_establishments(client, run_dir, authority, args.page_size)
@@ -241,6 +254,7 @@ def main(argv=None):
     manifest = {
         "source": "fsa",
         "run_id": run_id,
+        "sample": args.sample,
         "scraped_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "params": {"la_ids": [a["LocalAuthorityId"] for a in selected], "page_size": args.page_size},
         "datasets": [
