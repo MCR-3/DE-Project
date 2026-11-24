@@ -181,6 +181,7 @@ def main(argv=None):
     manifest = {
         "source": "ofsted",
         "run_id": run_id,
+        "sample": False,  # the CSV is always landed whole: every Ofsted run is a full run
         "scraped_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "params": {"url": url},
         "datasets": [
