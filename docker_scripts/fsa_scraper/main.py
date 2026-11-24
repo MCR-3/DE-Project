@@ -9,6 +9,7 @@ Nothing is parsed or cleaned: every API response is written to disk exactly as r
         ratings.json                         GET /Ratings (every possible rating, FHRS and FHIS)
         score_descriptors.json               GET /ScoreDescriptors (the wording of every score value)
         establishments/la_<id>/page_0001.json   GET /Establishments?localAuthorityId=<id>&pageNumber=1 ...
+        establishments/la_<id>/done.json     written after the authority's last page (see resuming)
         manifest.json                        what was fetched, read by docker_scripts/mongo_loader
 
 `manifest.json` is written last: a run folder without it is an unfinished run and is not loaded.
@@ -17,6 +18,10 @@ A run is either a full run (`--no-sample`: every English authority, about 500,00
 or a sample run (`--sample`, the default when run by hand: only the authorities of `--la-ids`, a
 comma-separated list of FSA `LocalAuthorityId` values). Only English authorities are accepted (the
 project is limited to England). The manifest records which one it was in its `sample` field.
+
+Resuming: a full run takes one to two hours. Once all the pages of an authority are saved, its
+`done.json` lists them; a rerun with the same run id (an Airflow retry) skips those authorities
+instead of fetching them again. The reference files are always fetched again (one call each).
 
   * Command-line arguments: filled in by the DAG through `DockerOperator(command=[...])`.
   * Configuration from the environment: `SCRAPER_USER_AGENT` (optional) overrides the User-Agent.
@@ -159,8 +164,23 @@ def land_reference(client, run_dir, path, file_name, name, collection, records_p
 
 
 def land_establishments(client, run_dir, authority, page_size):
-    """Save every page of one authority. Returns (relative file names, extract date)."""
+    """Save every page of one authority. Returns (relative file names, extract date).
+
+    An authority already completed by an earlier attempt of this run (its done.json exists, was
+    made with the same page size, and all the files it lists are still there) is not fetched
+    again: those files are reused.
+    """
     la_id, name = authority["LocalAuthorityId"], authority["Name"]
+    done_path = run_dir / f"establishments/la_{la_id}/done.json"
+    if done_path.is_file():
+        done = json.loads(done_path.read_text(encoding="utf-8"))
+        if done.get("page_size") == page_size and all((run_dir / f).is_file() for f in done["files"]):
+            log.info("%s (%d): already saved on %s by an earlier attempt of this run, %d page(s) reused",
+                     name, la_id, done.get("saved_at"), len(done["files"]))
+            return done["files"], done["extract_date"]
+        log.info("%s (%d): earlier attempt not reusable (other page size or missing page), fetching again",
+                 name, la_id)
+        done_path.unlink()
     files, extracted, page, total_pages = [], None, 1, 1
     while page <= total_pages:
         params = {"localAuthorityId": la_id, "pageNumber": page, "pageSize": page_size}
@@ -173,6 +193,13 @@ def land_establishments(client, run_dir, authority, page_size):
         log.info("%s (%d): page %d/%d, %d of %d establishments", name, la_id, page, max(total_pages, 1),
                  len(body["establishments"]), body["meta"]["totalCount"])
         page += 1
+    done = {
+        "page_size": page_size,
+        "saved_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "extract_date": extracted,
+        "files": files,
+    }
+    write_atomic(done_path, json.dumps(done, indent=2).encode("utf-8"))
     return files, extracted
 
 
