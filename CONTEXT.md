@@ -26,6 +26,14 @@ _Avoid_: Extract date, scrape date, ingestion date
 The date the source gives to the version of the data a run received: for FSA, the last time the establishment's local authority published its data; for Ofsted, the "as at" date of the release. Empty when the source gives none.
 _Avoid_: Extract date, release date, update date
 
+**Authority queue**:
+The local authorities a FSA run still has to fetch, largest first (by number of establishments), shared by the run's Fetchers.
+_Avoid_: Job queue, task list
+
+**Fetcher**:
+One of the parallel units of a FSA run that takes one authority at a time from the Authority queue and saves all of its pages, resuming from the last saved page if the authority was interrupted.
+_Avoid_: Worker (reserved for Airflow's Celery workers), consumer, scraper
+
 ### FSA food hygiene
 
 **Rating**:
