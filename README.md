@@ -56,6 +56,7 @@ Then fill in the values:
   docker run --rm apache/airflow:3.3.1 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
   ```
 
+- `DOCKER_GID`: group id of `/var/run/docker.sock`, added to the Airflow containers so the worker may start `DockerOperator` containers. On Linux (Docker Engine, including WSL without Docker Desktop) use `stat -c %g /var/run/docker.sock`; without it every `DockerOperator` task fails with `PermissionError(13, 'Permission denied')`. On Docker Desktop leave `0`.
 - `DOCKER_NETWORK`: network joined by the containers that `DockerOperator` launches. Empty by default; see [step 5](#5-build-the-example-script-image).
 
 - `HOST_DATA_DIR`: absolute path of this repository's `data/` folder **on the host** (e.g. `C:/Users/me/GitHub/DE-Project/data`). Required by the landing DAGs: containers started through `docker.sock` are created by the host's Docker daemon, so their bind mounts need a host path, not one inside the Airflow containers.
