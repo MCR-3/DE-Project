@@ -13,6 +13,10 @@ Nothing is parsed or cleaned: every API response is written to disk exactly as r
         manifest.json                        what was fetched, read by docker_scripts/mongo_loader
 
 `manifest.json` is written last: a run folder without it is an unfinished run and is not loaded.
+Each file it lists carries two dates (see CONTEXT.md): `fetch_date`, the UTC moment this run
+received the response, and `published_date`, the `LastPublishedDate` of the establishments' local
+authority (None for the reference files, the FSA gives them none). The API's own
+`meta.extractDate` is only the time of the request, so it is left in the raw files and not used.
 
 A run is either a full run (`--no-sample`: every English authority, about 500,000 establishments)
 or a sample run (`--sample`, the default when run by hand: only the authorities of `--la-ids`, a
@@ -118,10 +122,14 @@ class FsaClient:
         raise RuntimeError(f"too many retries for {path}")
 
 
-def extract_date(body):
-    """Date part of meta.extractDate (e.g. '2026-11-20'), None if the response has none."""
-    value = (body.get("meta") or {}).get("extractDate")
-    return value[:10] if value else None
+def utc_now():
+    """The current UTC time as an ISO 8601 string, e.g. '2026-11-20T13:14:14Z'."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def file_entry(path, fetch_date, published_date):
+    """One file of the manifest, with the dates the loader copies into each of its records."""
+    return {"path": path, "fetch_date": fetch_date, "published_date": published_date}
 
 
 def select_authorities(authorities, sample, la_ids):
@@ -150,6 +158,7 @@ def select_authorities(authorities, sample, la_ids):
 
 def land_reference(client, run_dir, path, file_name, name, collection, records_path, key_field):
     raw, body = client.get(path)
+    fetched = utc_now()
     write_atomic(run_dir / file_name, raw)
     log.info("%s: %d records saved in %s", name, len(body[records_path]), file_name)
     return {
@@ -158,49 +167,59 @@ def land_reference(client, run_dir, path, file_name, name, collection, records_p
         "format": "json",
         "records_path": records_path,
         "key_field": key_field,
-        "extract_date": extract_date(body),
-        "files": [file_name],
+        "files": [file_entry(file_name, fetched, None)],
     }
 
 
+def reusable(done, run_dir, page_size):
+    """Whether an earlier attempt's done.json can be reused as is."""
+    files = done.get("files")
+    return (
+        done.get("page_size") == page_size
+        and isinstance(files, list)
+        and all(isinstance(f, dict) and {"path", "fetch_date", "published_date"} <= f.keys() for f in files)
+        and all((run_dir / f["path"]).is_file() for f in files)
+    )
+
+
 def land_establishments(client, run_dir, authority, page_size):
-    """Save every page of one authority. Returns (relative file names, extract date).
+    """Save every page of one authority. Returns its manifest file entries.
 
     An authority already completed by an earlier attempt of this run (its done.json exists, was
-    made with the same page size, and all the files it lists are still there) is not fetched
-    again: those files are reused.
+    made with the same page size and format, and all the files it lists are still there) is not
+    fetched again: those files are reused.
     """
     la_id, name = authority["LocalAuthorityId"], authority["Name"]
+    published = authority.get("LastPublishedDate")
     done_path = run_dir / f"establishments/la_{la_id}/done.json"
     if done_path.is_file():
         done = json.loads(done_path.read_text(encoding="utf-8"))
-        if done.get("page_size") == page_size and all((run_dir / f).is_file() for f in done["files"]):
+        if reusable(done, run_dir, page_size):
             log.info("%s (%d): already saved on %s by an earlier attempt of this run, %d page(s) reused",
                      name, la_id, done.get("saved_at"), len(done["files"]))
-            return done["files"], done["extract_date"]
-        log.info("%s (%d): earlier attempt not reusable (other page size or missing page), fetching again",
-                 name, la_id)
+            return done["files"]
+        log.info("%s (%d): earlier attempt not reusable (other page size or format, or missing page), "
+                 "fetching again", name, la_id)
         done_path.unlink()
-    files, extracted, page, total_pages = [], None, 1, 1
+    files, page, total_pages = [], 1, 1
     while page <= total_pages:
         params = {"localAuthorityId": la_id, "pageNumber": page, "pageSize": page_size}
         raw, body = client.get("/Establishments", params)
+        fetched = utc_now()
         total_pages = body["meta"]["totalPages"]
         file_name = f"establishments/la_{la_id}/page_{page:04d}.json"
         write_atomic(run_dir / file_name, raw)
-        files.append(file_name)
-        extracted = extracted or extract_date(body)
+        files.append(file_entry(file_name, fetched, published))
         log.info("%s (%d): page %d/%d, %d of %d establishments", name, la_id, page, max(total_pages, 1),
                  len(body["establishments"]), body["meta"]["totalCount"])
         page += 1
     done = {
         "page_size": page_size,
-        "saved_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "extract_date": extracted,
+        "saved_at": utc_now(),
         "files": files,
     }
     write_atomic(done_path, json.dumps(done, indent=2).encode("utf-8"))
-    return files, extracted
+    return files
 
 
 def main(argv=None):
@@ -269,11 +288,9 @@ def main(argv=None):
 
             log.info("%s run: fetching %d authorities, page size %d",
                      "sample" if args.sample else "full", len(selected), args.page_size)
-            files, extracted = [], None
+            files = []
             for authority in selected:
-                authority_files, authority_extract = land_establishments(client, run_dir, authority, args.page_size)
-                files += authority_files
-                extracted = extracted or authority_extract
+                files += land_establishments(client, run_dir, authority, args.page_size)
     except Exception:
         log.exception("script failed, no manifest written")
         return EXIT_FAILURE
@@ -295,7 +312,6 @@ def main(argv=None):
                 "format": "json",
                 "records_path": "establishments",
                 "key_field": "FHRSID",
-                "extract_date": extracted,
                 "files": files,
             },
         ],

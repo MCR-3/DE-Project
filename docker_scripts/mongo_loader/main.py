@@ -7,16 +7,21 @@ dags/ofsted_landing.py). It knows nothing about the sources: everything it needs
     {"source": "fsa", "run_id": "...", "sample": false,
      "datasets": [{"name": "establishments", "collection": "raw_fsa_establishments",
                    "format": "json", "records_path": "establishments", "key_field": "FHRSID",
-                   "extract_date": "2026-11-20", "files": ["establishments/la_326/page_0001.json", ...]},
+                   "files": [{"path": "establishments/la_326/page_0001.json",
+                              "fetch_date": "2026-11-20T02:03:14Z",
+                              "published_date": "2026-11-20T00:39:11.3"}, ...]},
                   {"name": "schools", "collection": "raw_ofsted_schools", "format": "csv",
-                   "encoding": "utf-8-sig", "key_field": "URN", "extract_date": "2026-10-31",
-                   "files": ["schools.csv"]}]}
+                   "encoding": "utf-8-sig", "key_field": "URN",
+                   "files": [{"path": "schools.csv", "fetch_date": "2026-11-20T13:18:52Z",
+                              "published_date": "2026-10-31"}]}]}
 
 Each source record becomes one document, appended to the dataset's collection. The record is kept
-untouched under `payload` (a CSV row is a dict of strings; nothing is typed or cleaned here):
+untouched under `payload` (a CSV row is a dict of strings; nothing is typed or cleaned here), and
+gets the two dates of its file (see CONTEXT.md), copied as the scraper wrote them:
 
     {"source": "fsa", "dataset": "establishments", "run_id": "...", "sample": false,
-     "ingested_at": <UTC datetime>, "extract_date": "2026-11-20", "source_key": "1733057",
+     "ingested_at": <UTC datetime>, "fetch_date": "2026-11-20T02:03:14Z",
+     "published_date": "2026-11-20T00:39:11.3", "source_key": "1733057",
      "payload": {...as received...}}
 
 `sample` (required in the manifest) tells a sample run, a test on a subset of the source, from a
@@ -93,6 +98,12 @@ def read_manifest(run_dir):
             raise ValueError(f"dataset {dataset['name']}: unsupported format {dataset['format']!r}")
         if dataset["format"] == "json" and "records_path" not in dataset:
             raise ValueError(f"dataset {dataset['name']}: a json dataset needs 'records_path'")
+        for entry in dataset["files"]:
+            if not isinstance(entry, dict) or not {"path", "fetch_date", "published_date"} <= entry.keys():
+                raise ValueError(
+                    f"dataset {dataset['name']}: every file must be an object with 'path', 'fetch_date' "
+                    f"and 'published_date', got {entry!r} (a manifest from before these dates?)"
+                )
     return manifest
 
 
@@ -109,14 +120,15 @@ def read_records(run_dir, dataset, file_name):
             yield row
 
 
-def envelope(manifest, dataset, ingested_at, record):
+def envelope(manifest, dataset, entry, ingested_at, record):
     return {
         "source": manifest["source"],
         "dataset": dataset["name"],
         "run_id": manifest["run_id"],
         "sample": manifest["sample"],
         "ingested_at": ingested_at,
-        "extract_date": dataset.get("extract_date"),
+        "fetch_date": entry["fetch_date"],
+        "published_date": entry["published_date"],
         "source_key": str(record[dataset["key_field"]]),
         "payload": record,
     }
@@ -140,9 +152,9 @@ def load_dataset(db, manifest, dataset, run_dir, ingested_at):
     )
     inserted = skipped = 0
     batch = []
-    for file_name in dataset["files"]:
-        for record in read_records(run_dir, dataset, file_name):
-            batch.append(envelope(manifest, dataset, ingested_at, record))
+    for entry in dataset["files"]:
+        for record in read_records(run_dir, dataset, entry["path"]):
+            batch.append(envelope(manifest, dataset, entry, ingested_at, record))
             if len(batch) >= BATCH_SIZE:
                 done, dup = insert_batch(collection, batch)
                 inserted, skipped, batch = inserted + done, skipped + dup, []

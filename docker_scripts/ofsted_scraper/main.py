@@ -12,6 +12,9 @@ file name wording changes over the years), so the script reads the page, keeps t
 `*latest_inspections*.csv` files and takes the one with the newest "as at" date in its name.
 `--url` skips that search and downloads one given file (e.g. an older month).
 
+The manifest gives the file two dates (see CONTEXT.md): `fetch_date`, the UTC moment this run
+finished downloading it, and `published_date`, the "as at" date in its name (None if it has none).
+
   * Command-line arguments: filled in by the DAG through `DockerOperator(command=[...])`.
   * Configuration from the environment: `SCRAPER_USER_AGENT` (optional) overrides the User-Agent.
   * Exit code: 0 ok, 1 failure, 2 bad config (non-zero makes the Airflow task fail).
@@ -169,6 +172,7 @@ def main(argv=None):
             log.info("downloading %s", url)
             target = run_dir / "schools.csv"
             size = download(session, url, target)
+            fetched = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         encoding, rows = inspect_csv(target)
     except Exception:
         log.exception("script failed, no manifest written")
@@ -191,9 +195,14 @@ def main(argv=None):
                 "format": "csv",
                 "encoding": encoding,
                 "key_field": KEY_FIELD,
-                "extract_date": as_at.isoformat() if as_at else None,
                 "source_url": url,
-                "files": ["schools.csv"],
+                "files": [
+                    {
+                        "path": "schools.csv",
+                        "fetch_date": fetched,
+                        "published_date": as_at.isoformat() if as_at else None,
+                    }
+                ],
             }
         ],
     }
