@@ -2,7 +2,7 @@
 
 Data engineering project running on Apache Airflow 3.3.1 (CeleryExecutor) with Docker Compose.
 
-The `example_*` DAGs and `docker_scripts/example_script` are **examples** and templates to copy from, see [Writing your own script](#writing-your-own-script). The two **landing DAGs** (`fsa_landing` and `ofsted_landing`) are the first real part of the project: they scrape the UK food hygiene ratings (FSA) and the school inspections (Ofsted) and store them, as received, in MongoDB. See [Landing DAGs](#landing-dags-fsa-and-ofsted-scraping-into-mongodb). Staging, warehouse and reporting are not implemented yet.
+The `example_*` DAGs and `docker_scripts/example_script` are **examples** and templates to copy from, see [Writing your own script](#writing-your-own-script). The two **landing DAGs** (`fsa_landing` and `ofsted_landing`) are the first real part of the project: they scrape the UK food hygiene ratings (FSA) and the school inspections (Ofsted) and store them, as received, in MongoDB. See [Landing DAGs](#landing-dags-fsa-and-ofsted-scraping-into-mongodb). The warehouse schema is implemented in DuckDB. Staging, warehouse data loading and reporting are not implemented yet.
 
 ## Contents
 
@@ -16,6 +16,7 @@ The `example_*` DAGs and `docker_scripts/example_script` are **examples** and te
   - [6. Run a DAG](#6-run-a-dag)
   - [Landing DAGs: FSA and Ofsted scraping into MongoDB](#landing-dags-fsa-and-ofsted-scraping-into-mongodb)
 - [Writing your own script](#writing-your-own-script)
+- [Warehouse setup](#warehouse-setup)
 
 ## Services
 
@@ -260,3 +261,22 @@ To run the example script by hand, outside of Airflow (merging the main compose 
 ```bash
 docker compose -f docker-compose.yaml -f docker-compose.scripts.yaml run --rm example-script --n-rows 500
 ```
+
+## Warehouse setup
+
+The DuckDB warehouse contains five dimension tables and one
+fact table, following the project's star schema.
+
+Build and initialize the warehouse:
+
+```bash
+docker compose -f docker-compose.scripts.yaml build warehouse-setup
+docker compose -f docker-compose.scripts.yaml run --rm warehouse-setup
+```
+
+The database is stored at `data/warehouse/warehouse.duckdb`.
+
+The script creates empty tables and can be run multiple times
+without deleting existing data.
+
+The generated database file is excluded from Git.
