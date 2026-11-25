@@ -184,10 +184,16 @@ data/landing/ofsted/20261114T060000/
 ```json
 {
   "source": "fsa", "dataset": "establishments", "run_id": "20261120T020000", "sample": false,
-  "ingested_at": "2026-11-20T02:03:14Z", "extract_date": "2026-11-20", "source_key": "1733057",
+  "ingested_at": "2026-11-20T03:41:07Z", "fetch_date": "2026-11-20T02:03:14Z",
+  "published_date": "2026-11-20T00:39:11.3", "source_key": "1733057",
   "payload": {"FHRSID": 1733057, "BusinessName": "...", "RatingValue": "5", "RatingDate": "2026-05-12T00:00:00", "scores": {"Hygiene": 5}, "...": "as received"}
 }
 ```
+
+Every document carries two dates, copied from its file in the manifest (see [CONTEXT.md](CONTEXT.md)):
+
+- `fetch_date`: when the run received the file (UTC).
+- `published_date`: the date the source gives to that version of the data, as the source writes it. For FSA establishments, the `LastPublishedDate` of their local authority; for Ofsted, the "as at" date of the release; `null` for the FSA reference datasets (authorities, business types, ratings, score descriptors), which the FSA does not date. The FSA API's `meta.extractDate` is only the time of the request, so it is not used.
 
 `sample` is `true` for the documents of a sample run (a test on a few authorities) and `false` for a full run; Ofsted runs are always full. Sample and full runs share the collections, so anything that reads them as the state of the source must keep only `sample: false`. The manifest must say which it is: the loader refuses a manifest without `sample`.
 
@@ -214,26 +220,12 @@ docker compose exec project-mongo mongosh -u project -p devpassword --authentica
 
 A rerun with the same `--run-id` resumes: the authorities already completed in that folder (with the same page size) are reused, not fetched again. Delete the folder (`data/landing/fsa/test/`) for a fresh test.
 
-**Documents loaded before the `sample` field existed.** Runs loaded before this field was added have no `sample`. The FSA ones were all sample runs (the three default authorities) and the Ofsted ones full runs; tag them once with:
+**Data landed before `fetch_date` and `published_date`.** Earlier runs had a single `extract_date` per dataset instead (the FSA one was in fact the request time). The loader refuses their manifests, and their documents lack the two dates. Those runs were tests (FSA sample runs and one Ofsted run that can be landed again with the `url` parameter), so the landing zone is emptied rather than migrated: delete the `raw_*` collections and the folders under `data/landing/`, then trigger the landing DAGs again.
 
 ```bash
 docker compose exec project-mongo mongosh -u project -p devpassword --authenticationDatabase admin project --eval '
-["raw_fsa_authorities", "raw_fsa_business_types", "raw_fsa_establishments"].forEach(c =>
-  print(c, db[c].updateMany({sample: {$exists: false}}, {$set: {sample: true}}).modifiedCount));
-print("raw_ofsted_schools", db.raw_ofsted_schools.updateMany({sample: {$exists: false}}, {$set: {sample: false}}).modifiedCount);'
-```
-
-Their `manifest.json` files have no `sample` either, so the loader refuses them (for instance when an old `load_into_mongo` task is cleared). Add it once with:
-
-```bash
-docker run --rm --user "$(id -u)" -v "$PWD/data:/data" --entrypoint python fsa-scraper:latest -c '
-import json, pathlib
-for path in pathlib.Path("/data/landing").glob("*/*/manifest.json"):
-    manifest = json.loads(path.read_text(encoding="utf-8"))
-    if "sample" not in manifest:
-        manifest["sample"] = manifest["source"] == "fsa"
-        path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        print(path, manifest["sample"])'
+db.getCollectionNames().filter(c => c.startsWith("raw_")).forEach(c => print(c, db[c].drop()));'
+docker run --rm --user "$(id -u)" -v "$PWD/data:/data" --entrypoint sh fsa-scraper:latest -c 'rm -rf /data/landing/fsa/* /data/landing/ofsted/*'
 ```
 
 ## Writing your own script
