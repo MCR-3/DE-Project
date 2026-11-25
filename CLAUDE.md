@@ -18,7 +18,7 @@ These override any default attribution behaviour of the agent or its tooling.
 ├── dags/                        Airflow DAGs, mounted at /opt/airflow/dags
 │   ├── example_dag.py           DAG `second_dag_stub`: spreadsheet -> CSV -> filter -> split -> SQL inserts
 │   ├── example_docker.py        DAG `example_docker_script`: runs docker_scripts/example_script via DockerOperator
-│   ├── fsa_landing.py           DAG `fsa_landing` (daily 02:00 UTC): `scrape_fsa` (docker_scripts/fsa_scraper) then `load_into_mongo` (docker_scripts/mongo_loader), both via DockerOperator; param `la_ids`
+│   ├── fsa_landing.py           DAG `fsa_landing` (weekly, Mondays 02:00 UTC): `scrape_fsa` (docker_scripts/fsa_scraper) then `load_into_mongo` (docker_scripts/mongo_loader), both via DockerOperator; params `sample`, `la_ids`
 │   ├── ofsted_landing.py        DAG `ofsted_landing` (monthly, 14th): `scrape_ofsted` (docker_scripts/ofsted_scraper) then `load_into_mongo`; param `url`
 │   └── dag_names.py             The single place where DAG ids / display names are defined (the landing DAGs import from it)
 ├── docker_scripts/
@@ -26,11 +26,11 @@ These override any default attribution behaviour of the agent or its tooling.
 │   │   ├── main.py              argparse + DB_* env vars + logging + exit codes, no real logic
 │   │   ├── requirements.txt     the script's own dependencies, independent from Airflow's
 │   │   └── Dockerfile
-│   ├── fsa_scraper/             Saves the FSA FHRS API responses as received (authorities, business types, establishments of the chosen England authorities, pages of 200) in data/landing/fsa/<run>/ + manifest.json; no DB
+│   ├── fsa_scraper/             Saves the FSA FHRS API responses as received (authorities, business types, ratings, score descriptors, establishments of every English authority or of a sample, pages of 200) in data/landing/fsa/<run>/ + manifest.json; no DB
 │   │   └── main.py, requirements.txt (requests), Dockerfile
 │   ├── ofsted_scraper/          Finds the newest "latest inspections" CSV on the gov.uk page and saves it untouched in data/landing/ofsted/<run>/schools.csv + manifest.json; no DB
 │   │   └── main.py, requirements.txt (requests, beautifulsoup4), Dockerfile
-│   └── mongo_loader/            Generic: reads a run folder's manifest.json and appends one envelope document per record to the collections it names (`project` db: raw_fsa_authorities, raw_fsa_business_types, raw_fsa_establishments, raw_ofsted_schools)
+│   └── mongo_loader/            Generic: reads a run folder's manifest.json and appends one envelope document per record to the collections it names (`project` db: raw_fsa_authorities, raw_fsa_business_types, raw_fsa_ratings, raw_fsa_score_descriptors, raw_fsa_establishments, raw_ofsted_schools)
 │       └── main.py, requirements.txt (pymongo), Dockerfile
 ├── Dockerfile, requirements.txt Custom Airflow image (see Dependencies)
 ├── docker-compose.yaml          The Airflow stack + project-db + project-mongo
@@ -67,9 +67,11 @@ Bind mounts are resolved by the **host's** dockerd, not by the worker: a path li
 
 ### The landing layer
 
-Each run of a landing DAG has one folder, `data/landing/<source>/<run>/` (`<run>` = the run's logical date, `YYYYMMDDTHHMMSS`, identical for the scrape task, the load task and their retries). The scraper writes the raw files, then `manifest.json` **last**; a folder without it is an unfinished run and the loader refuses it. The manifest lists the datasets (name, target collection, format, key field, extract date, files), which is all the generic `mongo_loader` needs.
+Each run of a landing DAG has one folder, `data/landing/<source>/<run>/` (`<run>` = the run's logical date, `YYYYMMDDTHHMMSS`, identical for the scrape task, the load task and their retries). The scraper writes the raw files, then `manifest.json` **last**; a folder without it is an unfinished run and the loader refuses it. The manifest lists the datasets (name, target collection, format, key field, extract date, files), which is all the generic `mongo_loader` needs, and a required top-level `sample` flag.
 
-Documents in MongoDB: `{source, dataset, run_id, ingested_at, extract_date, source_key, payload}`, `payload` being the record exactly as received (CSV rows are dicts of strings; no typing, no cleaning, no England filter on Ofsted). Loading is **append-only**, each run adds its own documents and history builds up; a unique index on `(run_id, source_key)` makes a retried load skip what is already there.
+A run is a **full run** (the whole source scope: every English authority for FSA; Ofsted runs are always full) or a **sample run** (`sample: true`, a test on a few FSA authorities). Both land in the same collections, so whatever reads them as the state of the source keeps only `sample: false`. Landing never filters by another source: matching FSA establishments to Ofsted schools is staging's job (`docs/adr/0001-landing-keeps-the-whole-source-scope.md`). The domain vocabulary is in `CONTEXT.md`. A full FSA run takes one to two hours; each completed authority gets an `establishments/la_<id>/done.json`, so a retry with the same run id skips it.
+
+Documents in MongoDB: `{source, dataset, run_id, sample, ingested_at, extract_date, source_key, payload}`, `payload` being the record exactly as received (CSV rows are dicts of strings; no typing, no cleaning, no England filter on Ofsted). Loading is **append-only**, each run adds its own documents and history builds up; a unique index on `(run_id, source_key)` makes a retried load skip what is already there.
 
 The task succeeds or fails on the container's exit code (the script uses 0 ok / 1 failure / 2 bad config).
 
@@ -92,7 +94,7 @@ docker compose ps                                             # health check
 docker compose down                                           # stop (-v also deletes the DB volumes, so run airflow-init again)
 ```
 
-Then open http://localhost:8080, un-pause the DAG (DAGs are created paused), and trigger it. `example_docker_script` takes an `n_rows` parameter, `fsa_landing` a `la_ids` parameter (comma-separated FSA `LocalAuthorityId` values, or `all` for every English authority; default `321,326,397`), `ofsted_landing` an optional `url` (a specific CSV instead of the newest release).
+Then open http://localhost:8080, un-pause the DAG (DAGs are created paused), and trigger it. `example_docker_script` takes an `n_rows` parameter, `fsa_landing` a `sample` checkbox (unticked by default: a full run of every English authority; ticked: a sample run of the authorities in `la_ids`, comma-separated FSA `LocalAuthorityId` values, default `321,326,397`), `ofsted_landing` an optional `url` (a specific CSV instead of the newest release).
 
 After changing a script, rebuild its image; the DAG uses the local image tag, so it will not pick up changes otherwise. DAG files under `dags/` are mounted, so edits are picked up without a rebuild.
 
@@ -114,9 +116,9 @@ There is no automated test suite and no CI. Verify changes by running them:
     example-script --n-rows 500 --output-table example_output
   docker compose exec project-db psql -U project project -c "select * from example_output"
   ```
-- **The FSA scraper on its own** (needs network access, no Airflow): `docker run --rm -v "$PWD/data:/data" fsa-scraper:latest --run-id test --la-ids 321` writes `data/landing/fsa/test/` (`authorities.json`, `business_types.json`, `establishments/la_321/page_0001.json`, `manifest.json`); `--la-ids 197` (Aberdeen City, Scotland) or `--page-size 500` logs an error and exits 2. A failed run exits 1 and has no `manifest.json`.
-- **The Ofsted scraper on its own** (needs network access, no Airflow): `docker run --rm -v "$PWD/data:/data" ofsted-scraper:latest --run-id test` writes `data/landing/ofsted/test/schools.csv` (about 22,000 rows) and `manifest.json`; add `--url <csv url>` for a specific month.
-- **The Mongo loader against `project-mongo`:** `docker compose up -d project-mongo`, then run the `mongo-loader` service with both compose files merged, `-v "$PWD/data:/data:ro"`, the `MONGO_HOST/PORT/DB/USER/PASSWORD` variables and `--run-dir /data/landing/fsa/test` (add `--no-deps` so it does not start the Airflow stack); check with `docker compose exec project-mongo mongosh -u project -p devpassword --authenticationDatabase admin project --eval "db.raw_fsa_establishments.countDocuments()"`. Loading the same run twice must not change the count (the second log line says everything is already loaded); a folder without `manifest.json` exits 2. Remove test data afterwards (`db.<collection>.deleteMany({run_id: "test"})`).
+- **The FSA scraper on its own** (needs network access, no Airflow): `docker run --rm --user "$(id -u)" -v "$PWD/data:/data" fsa-scraper:latest --run-id test --la-ids 321` (`--user`: the owner of `data/`, or the scraper cannot write there) makes a sample run (the default by hand; `--no-sample` is a full run) and writes `data/landing/fsa/test/` (`authorities.json`, `business_types.json`, `ratings.json`, `score_descriptors.json`, `establishments/la_321/page_0001.json`, `establishments/la_321/done.json`, `manifest.json` with `"sample": true`); `--la-ids 197` (Aberdeen City, Scotland), `--la-ids all` or `--page-size 500` logs an error and exits 2. Rerunning with the same `--run-id` reuses the completed authorities made with the same page size (delete the folder for a fresh run). A failed run exits 1 and has no `manifest.json`.
+- **The Ofsted scraper on its own** (needs network access, no Airflow): `docker run --rm --user "$(id -u)" -v "$PWD/data:/data" ofsted-scraper:latest --run-id test` writes `data/landing/ofsted/test/schools.csv` (about 22,000 rows) and `manifest.json`; add `--url <csv url>` for a specific month.
+- **The Mongo loader against `project-mongo`:** `docker compose up -d project-mongo`, then run the `mongo-loader` service with both compose files merged, `-v "$PWD/data:/data:ro"`, the `MONGO_HOST/PORT/DB/USER/PASSWORD` variables and `--run-dir /data/landing/fsa/test` (add `--no-deps` so it does not start the Airflow stack); check with `docker compose exec project-mongo mongosh -u project -p devpassword --authenticationDatabase admin project --eval "db.raw_fsa_establishments.countDocuments()"`. Loading the same run twice must not change the count (the second log line says everything is already loaded); a folder without `manifest.json`, or a manifest without `sample`, exits 2. Remove test data afterwards (`db.<collection>.deleteMany({run_id: "test"})`).
 - **A DAG:** with the stack up, look for parse errors in the UI or in `docker compose logs airflow-dag-processor`, then trigger the DAG and read the task logs in the UI. The `project-db` connection must exist before `example_docker.py` parses, because it calls `Connection.get("project-db")` at the top level. A quick parse check without the stack: `docker compose run --rm --no-deps --entrypoint python airflow-scheduler dags/example_dag.py` (no output besides deprecation warnings means it imports).
 
 ## Conventions

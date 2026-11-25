@@ -146,7 +146,7 @@ The landing phase fetches the two source datasets and stores them **as received*
 
 | DAG | Schedule | Task 1 (scrape) | Task 2 |
 | --- | --- | --- | --- |
-| `fsa_landing` ("FSA landing") | daily, 02:00 UTC (the FSA asks for bulk retrievals between 01:00 and 06:00) | `scrape_fsa`: `docker_scripts/fsa_scraper` | `load_into_mongo`: `docker_scripts/mongo_loader` |
+| `fsa_landing` ("FSA landing") | weekly, Mondays at 02:00 UTC (the FSA asks for bulk retrievals between 01:00 and 06:00) | `scrape_fsa`: `docker_scripts/fsa_scraper` | `load_into_mongo`: `docker_scripts/mongo_loader` |
 | `ofsted_landing` ("Ofsted landing") | monthly, on the 14th at 06:00 UTC (Ofsted publishes around the 10th-13th) | `scrape_ofsted`: `docker_scripts/ofsted_scraper` | `load_into_mongo`: `docker_scripts/mongo_loader` |
 
 Like every DAG they are created paused and have `catchup=False`; the tasks retry twice, 5 minutes apart. The DAGs' ids and display names are defined in one file, `dags/dag_names.py`. They do not use `project-db`.
@@ -157,14 +157,17 @@ Like every DAG they are created paused and have `catchup=False`; the tasks retry
 data/landing/fsa/20261120T020000/
   authorities.json                       every UK local authority (GET /Authorities)
   business_types.json                    GET /BusinessTypes
+  ratings.json                           GET /Ratings: every possible rating (0-5 for FHRS, Pass etc. for FHIS)
+  score_descriptors.json                 GET /ScoreDescriptors: the wording of every score value
   establishments/la_326/page_0001.json   one file per API page of 200 establishments, per authority
+  establishments/la_326/done.json        written after the authority's last page, so a retry skips it
   manifest.json
 data/landing/ofsted/20261114T060000/
   schools.csv                            the newest "latest inspections" CSV, byte for byte (~22,000 schools)
   manifest.json
 ```
 
-- **FSA** (`fsa_scraper`): reads the [FHRS API](https://api.ratings.food.gov.uk/help) (version 2, no key), at most 200 records per page and a pause of 0.5 s between calls, with retries on 429 and 5xx. Only English authorities are accepted (the project is limited to England). `fsa_landing` has a parameter `la_ids`: comma-separated FSA `LocalAuthorityId` values, or `all` for every English authority (about 500,000 establishments, around 2,500 calls). The default, `321,326,397`, is a small extract: Isles of Scilly (about 140 establishments), Bath and North East Somerset (about 1,800) and Leeds (about 7,700).
+- **FSA** (`fsa_scraper`): reads the [FHRS API](https://api.ratings.food.gov.uk/help) (version 2, no key), at most 200 records per page and a pause of 0.5 s between calls, with retries on 429 and 5xx. Only English authorities are accepted (the project is limited to England). A scheduled run is a **full run**: every English authority, about 500,000 establishments and 2,600 calls, one to two hours. If it fails, the retry resumes: authorities whose `done.json` exists are not fetched again. For a test, trigger `fsa_landing` by hand with **`sample`** ticked: only the authorities of the `la_ids` parameter are fetched (comma-separated FSA `LocalAuthorityId` values; default `321,326,397`: Isles of Scilly, about 140 establishments, Bath and North East Somerset, about 1,800, and Leeds, about 7,700). Why every establishment and not only the schools: [ADR 0001](docs/adr/0001-landing-keeps-the-whole-source-scope.md).
 - **Ofsted** (`ofsted_scraper`): the gov.uk page has no stable download link, so the scraper reads the publication page and downloads the `latest_inspections` CSV with the newest date in its name. `ofsted_landing` has an optional parameter `url` to land a specific CSV (e.g. an older month) instead. All rows are kept.
 
 **What lands in MongoDB.** `mongo_loader` reads the manifest and inserts one document per record into the `project` database of `project-mongo`:
@@ -173,16 +176,20 @@ data/landing/ofsted/20261114T060000/
 | --- | --- | --- | --- |
 | `raw_fsa_authorities` | FSA `/Authorities` | local authority | `LocalAuthorityId` |
 | `raw_fsa_business_types` | FSA `/BusinessTypes` | business type | `BusinessTypeId` |
+| `raw_fsa_ratings` | FSA `/Ratings` | possible rating | `ratingId` |
+| `raw_fsa_score_descriptors` | FSA `/ScoreDescriptors` | score value of a category | `Id` |
 | `raw_fsa_establishments` | FSA `/Establishments` | establishment, per run | `FHRSID` |
 | `raw_ofsted_schools` | Ofsted CSV | school, per run | `URN` |
 
 ```json
 {
-  "source": "fsa", "dataset": "establishments", "run_id": "20261120T020000",
+  "source": "fsa", "dataset": "establishments", "run_id": "20261120T020000", "sample": false,
   "ingested_at": "2026-11-20T02:03:14Z", "extract_date": "2026-11-20", "source_key": "1733057",
   "payload": {"FHRSID": 1733057, "BusinessName": "...", "RatingValue": "5", "RatingDate": "2026-05-12T00:00:00", "scores": {"Hygiene": 5}, "...": "as received"}
 }
 ```
+
+`sample` is `true` for the documents of a sample run (a test on a few authorities) and `false` for a full run; Ofsted runs are always full. Sample and full runs share the collections, so anything that reads them as the state of the source must keep only `sample: false`. The manifest must say which it is: the loader refuses a manifest without `sample`.
 
 The loading is **append-only**: every run adds its documents and never changes the earlier ones, which is how the rating history builds up (the FSA API only exposes the latest rating of each business). A unique index on `(run_id, source_key)` makes a retry safe: documents already loaded for that run are skipped, not duplicated.
 
@@ -191,9 +198,11 @@ Needs `HOST_DATA_DIR` in `.env` (see [step 1](#1-configure-the-env-file)), the `
 To run the steps by hand, outside of Airflow:
 
 ```bash
-# scrape (writes data/landing/fsa/test/ and data/landing/ofsted/test/)
-docker run --rm -v "$PWD/data:/data" fsa-scraper:latest --run-id test --la-ids 321,326
-docker run --rm -v "$PWD/data:/data" ofsted-scraper:latest --run-id test
+# scrape (writes data/landing/fsa/test/ and data/landing/ofsted/test/); by hand the FSA scraper
+# makes a sample run by default, add --no-sample for a full run
+# (--user: run as the owner of data/, i.e. AIRFLOW_UID, or the scraper cannot write there)
+docker run --rm --user "$(id -u)" -v "$PWD/data:/data" fsa-scraper:latest --run-id test --la-ids 321,326
+docker run --rm --user "$(id -u)" -v "$PWD/data:/data" ofsted-scraper:latest --run-id test
 
 # load a run into Mongo (starts project-mongo, joins its network through the merged compose files)
 docker compose up -d project-mongo
@@ -201,6 +210,30 @@ docker compose -f docker-compose.yaml -f docker-compose.scripts.yaml run --rm --
 
 # look at the result
 docker compose exec project-mongo mongosh -u project -p devpassword --authenticationDatabase admin project --eval "db.raw_fsa_establishments.countDocuments()"
+```
+
+A rerun with the same `--run-id` resumes: the authorities already completed in that folder (with the same page size) are reused, not fetched again. Delete the folder (`data/landing/fsa/test/`) for a fresh test.
+
+**Documents loaded before the `sample` field existed.** Runs loaded before this field was added have no `sample`. The FSA ones were all sample runs (the three default authorities) and the Ofsted ones full runs; tag them once with:
+
+```bash
+docker compose exec project-mongo mongosh -u project -p devpassword --authenticationDatabase admin project --eval '
+["raw_fsa_authorities", "raw_fsa_business_types", "raw_fsa_establishments"].forEach(c =>
+  print(c, db[c].updateMany({sample: {$exists: false}}, {$set: {sample: true}}).modifiedCount));
+print("raw_ofsted_schools", db.raw_ofsted_schools.updateMany({sample: {$exists: false}}, {$set: {sample: false}}).modifiedCount);'
+```
+
+Their `manifest.json` files have no `sample` either, so the loader refuses them (for instance when an old `load_into_mongo` task is cleared). Add it once with:
+
+```bash
+docker run --rm --user "$(id -u)" -v "$PWD/data:/data" --entrypoint python fsa-scraper:latest -c '
+import json, pathlib
+for path in pathlib.Path("/data/landing").glob("*/*/manifest.json"):
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if "sample" not in manifest:
+        manifest["sample"] = manifest["source"] == "fsa"
+        path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        print(path, manifest["sample"])'
 ```
 
 ## Writing your own script

@@ -6,13 +6,22 @@ Nothing is parsed or cleaned: every API response is written to disk exactly as r
     <output-dir>/<run-id>/
         authorities.json                     GET /Authorities (all UK local authorities)
         business_types.json                  GET /BusinessTypes
+        ratings.json                         GET /Ratings (every possible rating, FHRS and FHIS)
+        score_descriptors.json               GET /ScoreDescriptors (the wording of every score value)
         establishments/la_<id>/page_0001.json   GET /Establishments?localAuthorityId=<id>&pageNumber=1 ...
+        establishments/la_<id>/done.json     written after the authority's last page (see resuming)
         manifest.json                        what was fetched, read by docker_scripts/mongo_loader
 
 `manifest.json` is written last: a run folder without it is an unfinished run and is not loaded.
 
-Only English authorities are accepted (the project is limited to England): `--la-ids` is a
-comma-separated list of FSA `LocalAuthorityId` values, or `all` for every English authority.
+A run is either a full run (`--no-sample`: every English authority, about 500,000 establishments)
+or a sample run (`--sample`, the default when run by hand: only the authorities of `--la-ids`, a
+comma-separated list of FSA `LocalAuthorityId` values). Only English authorities are accepted (the
+project is limited to England). The manifest records which one it was in its `sample` field.
+
+Resuming: a full run takes one to two hours. Once all the pages of an authority are saved, its
+`done.json` lists them; a rerun with the same run id (an Airflow retry) skips those authorities
+instead of fetching them again. The reference files are always fetched again (one call each).
 
   * Command-line arguments: filled in by the DAG through `DockerOperator(command=[...])`.
   * Configuration from the environment: `SCRAPER_USER_AGENT` (optional) overrides the User-Agent.
@@ -40,7 +49,7 @@ EXIT_BAD_CONFIG = 2
 
 API_URL = "https://api.ratings.food.gov.uk"
 DEFAULT_USER_AGENT = "DEProjectFsaScraper/1.0 (https://github.com/MCR-3/DE-Project)"
-# A small England extract: the Isles of Scilly (tiny), Bath and North East Somerset (medium), Leeds (large).
+# The default sample: the Isles of Scilly (tiny), Bath and North East Somerset (medium), Leeds (large).
 DEFAULT_LA_IDS = "321,326,397"
 MAX_PAGE_SIZE = 200  # the FSA rate-limits larger pages (HTTP 429)
 NON_ENGLISH_REGIONS = {"Scotland", "Wales", "Northern Ireland"}
@@ -55,10 +64,16 @@ def parse_args(argv=None):
         help="name of this run's folder (default: UTC timestamp, e.g. 20261120T090000Z)",
     )
     parser.add_argument(
+        "--sample",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="--sample (default): a sample run, only the authorities of --la-ids; "
+        "--no-sample: a full run, every English authority (--la-ids is ignored)",
+    )
+    parser.add_argument(
         "--la-ids",
         default=DEFAULT_LA_IDS,
-        help="comma-separated FSA LocalAuthorityId values, or 'all' for every English authority "
-        f"(default: {DEFAULT_LA_IDS})",
+        help=f"comma-separated FSA LocalAuthorityId values of a sample run (default: {DEFAULT_LA_IDS})",
     )
     parser.add_argument("--page-size", type=int, default=MAX_PAGE_SIZE, help=f"establishments per page, 1-{MAX_PAGE_SIZE}")
     parser.add_argument("--sleep", type=float, default=0.5, help="seconds to wait between two API calls")
@@ -109,18 +124,22 @@ def extract_date(body):
     return value[:10] if value else None
 
 
-def select_authorities(authorities, la_ids):
-    """The list of LocalAuthorityId to fetch. Raises ValueError for unknown or non-English ones."""
+def select_authorities(authorities, sample, la_ids):
+    """The authorities to fetch: every English one for a full run, those of `la_ids` for a sample run.
+
+    Raises ValueError for unknown or non-English ones.
+    """
     english = {a["LocalAuthorityId"]: a for a in authorities if a.get("RegionName") not in NON_ENGLISH_REGIONS}
     known = {a["LocalAuthorityId"]: a for a in authorities}
-    if la_ids.strip().lower() == "all":
+    if not sample:
         return [english[i] for i in sorted(english)]
     selected = []
     for raw in la_ids.split(","):
         try:
             la_id = int(raw)
         except ValueError:
-            raise ValueError(f"not a LocalAuthorityId: {raw!r}") from None
+            hint = " (for every English authority, make a full run with --no-sample)" if raw.strip().lower() == "all" else ""
+            raise ValueError(f"not a LocalAuthorityId: {raw!r}{hint}") from None
         if la_id not in known:
             raise ValueError(f"unknown LocalAuthorityId {la_id}")
         if la_id not in english:
@@ -145,8 +164,23 @@ def land_reference(client, run_dir, path, file_name, name, collection, records_p
 
 
 def land_establishments(client, run_dir, authority, page_size):
-    """Save every page of one authority. Returns (relative file names, extract date)."""
+    """Save every page of one authority. Returns (relative file names, extract date).
+
+    An authority already completed by an earlier attempt of this run (its done.json exists, was
+    made with the same page size, and all the files it lists are still there) is not fetched
+    again: those files are reused.
+    """
     la_id, name = authority["LocalAuthorityId"], authority["Name"]
+    done_path = run_dir / f"establishments/la_{la_id}/done.json"
+    if done_path.is_file():
+        done = json.loads(done_path.read_text(encoding="utf-8"))
+        if done.get("page_size") == page_size and all((run_dir / f).is_file() for f in done["files"]):
+            log.info("%s (%d): already saved on %s by an earlier attempt of this run, %d page(s) reused",
+                     name, la_id, done.get("saved_at"), len(done["files"]))
+            return done["files"], done["extract_date"]
+        log.info("%s (%d): earlier attempt not reusable (other page size or missing page), fetching again",
+                 name, la_id)
+        done_path.unlink()
     files, extracted, page, total_pages = [], None, 1, 1
     while page <= total_pages:
         params = {"localAuthorityId": la_id, "pageNumber": page, "pageSize": page_size}
@@ -159,6 +193,13 @@ def land_establishments(client, run_dir, authority, page_size):
         log.info("%s (%d): page %d/%d, %d of %d establishments", name, la_id, page, max(total_pages, 1),
                  len(body["establishments"]), body["meta"]["totalCount"])
         page += 1
+    done = {
+        "page_size": page_size,
+        "saved_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "extract_date": extracted,
+        "files": files,
+    }
+    write_atomic(done_path, json.dumps(done, indent=2).encode("utf-8"))
     return files, extracted
 
 
@@ -208,9 +249,17 @@ def main(argv=None):
                 client, run_dir, "/BusinessTypes", "business_types.json",
                 "business_types", "raw_fsa_business_types", "businessTypes", "BusinessTypeId",
             )
+            ratings = land_reference(
+                client, run_dir, "/Ratings", "ratings.json",
+                "ratings", "raw_fsa_ratings", "ratings", "ratingId",
+            )
+            score_descriptors = land_reference(
+                client, run_dir, "/ScoreDescriptors", "score_descriptors.json",
+                "score_descriptors", "raw_fsa_score_descriptors", "scoreDescriptors", "Id",
+            )
             authority_list = json.loads((run_dir / "authorities.json").read_text(encoding="utf-8"))["authorities"]
             try:
-                selected = select_authorities(authority_list, args.la_ids)
+                selected = select_authorities(authority_list, args.sample, args.la_ids)
             except ValueError as e:
                 log.error("bad --la-ids: %s", e)
                 return EXIT_BAD_CONFIG
@@ -218,7 +267,8 @@ def main(argv=None):
                 log.error("no authority selected")
                 return EXIT_BAD_CONFIG
 
-            log.info("fetching %d authorities, page size %d", len(selected), args.page_size)
+            log.info("%s run: fetching %d authorities, page size %d",
+                     "sample" if args.sample else "full", len(selected), args.page_size)
             files, extracted = [], None
             for authority in selected:
                 authority_files, authority_extract = land_establishments(client, run_dir, authority, args.page_size)
@@ -231,11 +281,14 @@ def main(argv=None):
     manifest = {
         "source": "fsa",
         "run_id": run_id,
+        "sample": args.sample,
         "scraped_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "params": {"la_ids": [a["LocalAuthorityId"] for a in selected], "page_size": args.page_size},
         "datasets": [
             authorities,
             business_types,
+            ratings,
+            score_descriptors,
             {
                 "name": "establishments",
                 "collection": "raw_fsa_establishments",
