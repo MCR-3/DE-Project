@@ -18,9 +18,13 @@ _Avoid_: Complete extract, all
 A run limited to a small, chosen subset of the source (for FSA, a few local authorities), made for testing and never to be read as the state of the whole source.
 _Avoid_: Extract, test extract, subset
 
-**Extract date**:
-The date at which the source itself produced the data a run received (FSA `meta.extractDate`, the Ofsted release date), as opposed to when the run happened.
-_Avoid_: Scrape date, ingestion date
+**Fetch date**:
+The moment a run received a piece of data from the source.
+_Avoid_: Extract date, scrape date, ingestion date
+
+**Published date**:
+The date the source gives to the version of the data a run received: for FSA, the last time the establishment's local authority published its data; for Ofsted, the "as at" date of the release. Empty when the source gives none.
+_Avoid_: Extract date, release date, update date
 
 ### FSA food hygiene
 
