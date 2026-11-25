@@ -121,10 +121,13 @@ with DAG(
     )
 
     @task
-    def fetcher_commands(run_id, fetchers, max_rps):
-        """One `fetch` command per Fetcher; its last item is the Fetcher's number, shown in the UI."""
+    def fetcher_commands(landing_run, fetchers, max_rps):
+        """One `fetch` command per Fetcher; its last item is the Fetcher's number, shown in the UI.
+
+        Not `run_id`: TaskFlow refuses a parameter named like a key of the Airflow context.
+        """
         return [
-            ["fetch", "--output-dir", LANDING_DIR, "--run-id", run_id, "--max-rps", str(max_rps), "--fetcher", str(i)]
+            ["fetch", "--output-dir", LANDING_DIR, "--run-id", landing_run, "--max-rps", str(max_rps), "--fetcher", str(i)]
             for i in range(1, int(fetchers) + 1)
         ]
 
