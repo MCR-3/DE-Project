@@ -16,7 +16,7 @@ Sub-commands:
                 staging.stg_dq_result and committed even when they fail; then, only if no run-level
                 check failed, the load (row-level problems go to staging.stg_quarantine in the same
                 transaction). A failed run-level check exits 1 with nothing loaded.
-                Steps: reference (step 1, FSA), schools (step 2, Ofsted), establishments (step 3, FSA), geo (step 4, postcode run).
+                Steps: reference (step 1, FSA), schools (step 2, Ofsted), establishments (step 3, FSA), geo (step 4, postcode run), ofsted_inspections and fsa_measures (step 5).
 
   * Configuration from the environment: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD (Airflow
     connection `project-db`), MONGO_HOST, MONGO_PORT, MONGO_DB, MONGO_USER, MONGO_PASSWORD (connection
@@ -54,6 +54,7 @@ SEEDS = {
     "region_map.csv": "staging.stg_region_map",
     "district_la_map.csv": "staging.stg_district_la_map",
     "ofsted_level.csv": "staging.stg_ofsted_level",
+    "measure.csv": "staging.stg_measure",
 }
 
 # staging step -> (source, SQL file, tables whose row counts are logged after the step)
@@ -66,6 +67,9 @@ STEPS = {
                        ["staging.stg_food_establishment", "staging.stg_fsa_inspection"]),
     # run = a postcode run (pass it with --run-id: a run whose lookups were all cached has no document
     # and is never listed as pending); the step re-matches every school and business
+    "ofsted_inspections": ("ofsted", "50_ofsted_inspections.sql",
+                           ["staging.stg_ofsted_inspection", "staging.stg_inspection_measure"]),
+    "fsa_measures": ("fsa", "51_fsa_measures.sql", ["staging.stg_inspection_measure"]),
     "geo": ("postcodes", "40_geo.sql",
             ["staging.stg_postcode", "staging.stg_school", "staging.stg_food_establishment"]),
 }

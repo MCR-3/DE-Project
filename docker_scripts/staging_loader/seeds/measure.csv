@@ -1,0 +1,21 @@
+measure_code,source,framework,source_field,measure_name,scale,min_value,max_value,better_when,is_overall,in_composite
+FHRS_HYGIENE,FSA,FHRS,Hygiene,Food hygiene and safety,FHRS_POINTS,0,25,Lower,false,false
+FHRS_STRUCTURAL,FSA,FHRS,Structural,Structural compliance,FHRS_POINTS,0,25,Lower,false,false
+FHRS_CONF_MGMT,FSA,FHRS,ConfidenceInManagement,Confidence in management,FHRS_POINTS,0,30,Lower,false,false
+FHRS_OVERALL,FSA,FHRS,RatingValue,Food hygiene rating,FHRS_0_5,0,5,Higher,true,false
+OFSTED_RC_INCLUSION,OFSTED,RENEWED_2025,Inclusion,Inclusion,OFSTED_5_POINT,1,5,Lower,false,true
+OFSTED_RC_CURRICULUM_TEACHING,OFSTED,RENEWED_2025,Curriculum and teaching,Curriculum and teaching,OFSTED_5_POINT,1,5,Lower,false,true
+OFSTED_RC_ACHIEVEMENT,OFSTED,RENEWED_2025,Achievement,Achievement,OFSTED_5_POINT,1,5,Lower,false,true
+OFSTED_RC_ATTENDANCE_BEHAVIOUR,OFSTED,RENEWED_2025,Attendance and behaviour,Attendance and behaviour,OFSTED_5_POINT,1,5,Lower,false,true
+OFSTED_RC_PERSONAL_DEVELOPMENT,OFSTED,RENEWED_2025,Personal development and wellbeing,Personal development and wellbeing,OFSTED_5_POINT,1,5,Lower,false,true
+OFSTED_RC_LEADERSHIP_GOVERNANCE,OFSTED,RENEWED_2025,Leadership and governance,Leadership and governance,OFSTED_5_POINT,1,5,Lower,false,true
+OFSTED_RC_EARLY_YEARS,OFSTED,RENEWED_2025,Early years (where applicable),Early years,OFSTED_5_POINT,1,5,Lower,false,false
+OFSTED_RC_POST16,OFSTED,RENEWED_2025,Post-16 provision (where applicable),Post-16 provision,OFSTED_5_POINT,1,5,Lower,false,false
+OFSTED_EIF_OVERALL,OFSTED,EIF_2019,Latest OEIF overall effectiveness,Overall effectiveness,OFSTED_4_POINT,1,4,Lower,true,false
+OFSTED_EIF_QUALITY_OF_EDUCATION,OFSTED,EIF_2019,Latest OEIF quality of education,Quality of education,OFSTED_4_POINT,1,4,Lower,false,true
+OFSTED_EIF_BEHAVIOUR,OFSTED,EIF_2019,Latest OEIF behaviour and attitudes,Behaviour and attitudes,OFSTED_4_POINT,1,4,Lower,false,true
+OFSTED_EIF_PERSONAL_DEVELOPMENT,OFSTED,EIF_2019,Latest OEIF personal development,Personal development,OFSTED_4_POINT,1,4,Lower,false,true
+OFSTED_EIF_LEADERSHIP,OFSTED,EIF_2019,Latest OEIF effectiveness of leadership and management,Leadership and management,OFSTED_4_POINT,1,4,Lower,false,true
+OFSTED_EIF_EARLY_YEARS,OFSTED,EIF_2019,Latest OEIF early years provision (where applicable),Early years provision,OFSTED_4_POINT,1,4,Lower,false,false
+OFSTED_EIF_SIXTH_FORM,OFSTED,EIF_2019,Latest OEIF sixth form provision (where applicable),Sixth form provision,OFSTED_4_POINT,1,4,Lower,false,false
+OFSTED_UNGRADED_EST,OFSTED,UNGRADED,Ungraded inspection overall outcome,Implied grade from ungraded outcome,OFSTED_UNGRADED,1,2,Lower,false,false

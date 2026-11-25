@@ -70,6 +70,23 @@ CREATE TABLE IF NOT EXISTS staging.stg_fsa_score_descriptor (
 );
 
 -- Seeds (seeds/*.csv, reloaded by `init`)
+-- Measures of stg_inspection_measure (source of the warehouse Dim_Measure). Step 5 unpivots exactly the
+-- source fields listed here.
+CREATE TABLE IF NOT EXISTS staging.stg_measure (
+    measure_code  VARCHAR(40)  PRIMARY KEY,
+    source        VARCHAR(6)   NOT NULL CHECK (source IN ('FSA', 'OFSTED')),
+    framework     VARCHAR(12)  NOT NULL CHECK (framework IN ('FHRS', 'RENEWED_2025', 'EIF_2019', 'UNGRADED')),
+    source_field  VARCHAR(80)  NOT NULL,                 -- Ofsted column / FSA scores key (RatingValue for the overall)
+    measure_name  VARCHAR(80)  NOT NULL,
+    scale         VARCHAR(20)  NOT NULL,                 -- joins stg_ofsted_level.scale for Ofsted
+    min_value     SMALLINT     NOT NULL,
+    max_value     SMALLINT     NOT NULL,
+    better_when   VARCHAR(6)   NOT NULL CHECK (better_when IN ('Lower', 'Higher')),
+    is_overall    BOOLEAN      NOT NULL,
+    in_composite  BOOLEAN      NOT NULL,
+    UNIQUE (framework, source_field)
+);
+
 CREATE TABLE IF NOT EXISTS staging.stg_ofsted_level (
     scale        VARCHAR(20) NOT NULL CHECK (scale IN ('OFSTED_4_POINT', 'OFSTED_5_POINT', 'OFSTED_UNGRADED')),
     level_text   VARCHAR(60) NOT NULL,                   -- value as published (e.g. 2, Strong standard, School remains Good)
@@ -91,6 +108,8 @@ CREATE TABLE IF NOT EXISTS staging.stg_district_la_map (
     gss_code       VARCHAR(9)   NOT NULL,                -- ONS district code from postcodes.io (e.g. E07000035)
     district_name  VARCHAR(100) NOT NULL,
     la_code        VARCHAR(10)  NOT NULL,                -- FSA la_code; no FK (seeded before authorities), checked by DQ
+    match_method   VARCHAR(12)  NOT NULL CHECK (match_method IN ('exact', 'normalised', 'manual')),
+                                                         -- how the row was made: same name / spelling only / by hand
     PRIMARY KEY (gss_code, la_code)                      -- 1:N allowed (2023 reorganisations)
 );
 
