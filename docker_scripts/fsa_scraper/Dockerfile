@@ -9,7 +9,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py .
+COPY main.py authority_queue.py ./
 
 # Do not run as root. The DAG overrides the user so files written to the bind-mounted
 # data/ folder get the same owner as Airflow's.
