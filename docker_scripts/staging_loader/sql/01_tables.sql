@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS raw.fsa_ratings            (LIKE raw.fsa_authorities 
 CREATE TABLE IF NOT EXISTS raw.fsa_score_descriptors  (LIKE raw.fsa_authorities INCLUDING ALL);
 CREATE TABLE IF NOT EXISTS raw.fsa_establishments     (LIKE raw.fsa_authorities INCLUDING ALL);
 CREATE TABLE IF NOT EXISTS raw.ofsted_schools         (LIKE raw.fsa_authorities INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS raw.postcodes              (LIKE raw.fsa_authorities INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS raw.terminated_postcodes   (LIKE raw.fsa_authorities INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS raw.reverse_postcodes      (LIKE raw.fsa_authorities INCLUDING ALL);
 
 ----------------------------------------------------------------------------------------------------
 -- staging: reference tables
@@ -123,7 +126,32 @@ CREATE TABLE IF NOT EXISTS staging.stg_school (
     run_id                 TEXT         NOT NULL,        -- run that last wrote the values
     last_seen_run_id       TEXT         NOT NULL,        -- last run the school appeared in (even if quarantined there)
     last_seen_date         DATE         NOT NULL,        -- fetch date of that run; older than the latest full run = gone from the source
+    match_method           VARCHAR(16)  CHECK (match_method IN ('postcode', 'reverse_geocode')),  -- step 4: how la_code was found
+    reverse_distance_m     NUMERIC(8,1),                 -- step 4: terminated postcode -> nearest live postcode, metres
     loaded_at              TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+-- tables created before step 4
+ALTER TABLE staging.stg_school ADD COLUMN IF NOT EXISTS match_method VARCHAR(16)
+    CHECK (match_method IN ('postcode', 'reverse_geocode'));
+ALTER TABLE staging.stg_school ADD COLUMN IF NOT EXISTS reverse_distance_m NUMERIC(8,1);
+
+-- Step 4: the latest postcodes.io answer for every postcode looked up (any postcode run), so the
+-- geocoding survives the deletion of raw.* and a run that found everything in the cache.
+CREATE TABLE IF NOT EXISTS staging.stg_postcode (
+    postcode              VARCHAR(10)  PRIMARY KEY,      -- standard form, as sent to postcodes.io
+    status                VARCHAR(10)  NOT NULL CHECK (status IN ('live', 'terminated', 'not_found')),
+    latitude              NUMERIC(9,6),                  -- live: the postcode; terminated: the terminated postcode
+    longitude             NUMERIC(9,6),
+    admin_district_code   VARCHAR(9),                    -- live: the postcode; terminated: nearest live postcode
+    admin_district_name   VARCHAR(100),
+    admin_county_code     VARCHAR(9),                    -- NULL for unitary areas
+    admin_county_name     VARCHAR(100),
+    region                VARCHAR(40),                   -- standard (Ofsted) name via stg_region_map
+    reverse_postcode      VARCHAR(10),                   -- terminated only: nearest live postcode found
+    reverse_distance_m    NUMERIC(8,1),
+    fetched_at            TIMESTAMPTZ  NOT NULL,         -- fetch date of the bulk lookup
+    run_id                TEXT         NOT NULL,         -- postcode run of that lookup
+    loaded_at             TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS staging.stg_food_establishment (

@@ -169,7 +169,9 @@ ON CONFLICT (urn) DO UPDATE SET
     admin_district_code = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.admin_district_code END,
     admin_district_name = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.admin_district_name END,
     admin_county_code   = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.admin_county_code END,
-    admin_county_name   = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.admin_county_name END
+    admin_county_name   = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.admin_county_name END,
+    match_method        = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.match_method END,
+    reverse_distance_m  = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.reverse_distance_m END
 -- an older run staged again by hand never overwrites a newer one
 WHERE EXCLUDED.last_seen_date >= t.last_seen_date;
 

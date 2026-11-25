@@ -16,7 +16,7 @@ Sub-commands:
                 staging.stg_dq_result and committed even when they fail; then, only if no run-level
                 check failed, the load (row-level problems go to staging.stg_quarantine in the same
                 transaction). A failed run-level check exits 1 with nothing loaded.
-                Steps: reference (step 1, FSA), schools (step 2, Ofsted), establishments (step 3, FSA).
+                Steps: reference (step 1, FSA), schools (step 2, Ofsted), establishments (step 3, FSA), geo (step 4, postcode run).
 
   * Configuration from the environment: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD (Airflow
     connection `project-db`), MONGO_HOST, MONGO_PORT, MONGO_DB, MONGO_USER, MONGO_PASSWORD (connection
@@ -64,6 +64,10 @@ STEPS = {
     "schools": ("ofsted", "20_schools.sql", ["staging.stg_school"]),
     "establishments": ("fsa", "30_establishments.sql",
                        ["staging.stg_food_establishment", "staging.stg_fsa_inspection"]),
+    # run = a postcode run (pass it with --run-id: a run whose lookups were all cached has no document
+    # and is never listed as pending); the step re-matches every school and business
+    "geo": ("postcodes", "40_geo.sql",
+            ["staging.stg_postcode", "staging.stg_school", "staging.stg_food_establishment"]),
 }
 
 
@@ -75,6 +79,7 @@ SOURCES = {
     "fsa": ["raw_fsa_establishments", "raw_fsa_authorities", "raw_fsa_business_types",
             "raw_fsa_ratings", "raw_fsa_score_descriptors"],
     "ofsted": ["raw_ofsted_schools"],
+    "postcodes": ["raw_postcodes", "raw_terminated_postcodes", "raw_reverse_postcodes"],
 }
 
 ENVELOPE = ["run_id", "source_key", "source", "dataset", "sample", "ingested_at",

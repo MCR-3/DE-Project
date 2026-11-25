@@ -50,6 +50,18 @@ LANGUAGE sql IMMUTABLE AS $$
     SELECT coalesce(staging.normalise_postcode(v) ~ '^[A-Z]{1,2}[0-9][A-Z0-9]? [0-9][A-Z]{2}$', FALSE)
 $$;
 
+-- Name key to compare local authority names written differently by Ofsted and postcodes.io:
+-- 'Kingston upon Hull, City of' = 'Kingston upon Hull', 'County Durham' = 'Durham',
+-- 'Bournemouth, Christchurch & Poole' = '... and Poole', 'St. Helens' = 'St Helens'
+CREATE OR REPLACE FUNCTION staging.name_key(v TEXT) RETURNS TEXT
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT NULLIF(btrim(regexp_replace(regexp_replace(regexp_replace(regexp_replace(
+               lower(v), '&', ' and ', 'g'),
+               ',\s*(city|county) of\s*$|^county\s+', '', 'g'),
+               '[.,''-]', ' ', 'g'),
+               '\s+', ' ', 'g')), '')
+$$;
+
 -- Postcode sector: outward code + first digit of the inward code ('SP7 0PF' -> 'SP7 0'); NULL unless full
 CREATE OR REPLACE FUNCTION staging.postcode_sector(v TEXT) RETURNS TEXT
 LANGUAGE sql IMMUTABLE AS $$

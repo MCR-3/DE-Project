@@ -11,9 +11,14 @@ saved exactly as received, one folder per run, then loaded by docker_scripts/mon
         terminated.json        GET /terminated_postcodes/<postcode> for every postcode the bulk lookup did
                                not find: {"responses": [{"query": "...", "response": <response as received,
                                404 included>}, ...]} (only `query` is ours, the API answers one postcode at a time)
+        reverse.json           for every terminated postcode found (it has coordinates but no district):
+                               POST /postcodes {"geolocations": [...]} (nearest live postcode, --reverse-radius,
+                               limit 1), one record per terminated postcode: {"query": "<terminated postcode>",
+                               "longitude": ..., "latitude": ..., "response": <bulk item as received>}
         manifest.json          what was fetched, read by mongo_loader (written last)
 
-Datasets: `raw_postcodes` (key `query`) and `raw_terminated_postcodes` (key `query`).
+Datasets: `raw_postcodes`, `raw_terminated_postcodes` and `raw_reverse_postcodes` (all keyed by `query`,
+the postcode looked up).
 
 The query is the postcode in its standard form (upper case, one space before the inward code), so the
 same postcode written differently by two sources is fetched once. Only full postcodes are sent; a
@@ -76,6 +81,8 @@ def parse_args(argv=None):
     parser.add_argument("--ofsted-run", help="landed Ofsted run to read (default: the latest full run)")
     parser.add_argument("--max-age-days", type=int, default=90, help="fetch again a postcode looked up longer ago (default 90)")
     parser.add_argument("--pause", type=float, default=0.2, help="seconds between two API calls (default 0.2)")
+    parser.add_argument("--reverse-radius", type=int, default=2000,
+                        help="metres around a terminated postcode to look for the nearest live one (default 2000, API max)")
     return parser.parse_args(argv)
 
 
@@ -161,8 +168,8 @@ def main(argv=None):
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     args = parse_args(argv)
-    if args.max_age_days < 0 or args.pause < 0:
-        log.error("--max-age-days and --pause must not be negative")
+    if args.max_age_days < 0 or args.pause < 0 or not 0 < args.reverse_radius <= 2000:
+        log.error("--max-age-days and --pause must not be negative, --reverse-radius must be 1 to 2000")
         return EXIT_BAD_CONFIG
     started = datetime.now(timezone.utc).replace(microsecond=0)
     run_id = args.run_id or started.strftime("%Y%m%dT%H%M%SZ")
@@ -175,6 +182,7 @@ def main(argv=None):
         (run_dir / "manifest.json").unlink(missing_ok=True)  # a rerun is only complete once it rewrites it
         shutil.rmtree(run_dir / "bulk", ignore_errors=True)
         (run_dir / "terminated.json").unlink(missing_ok=True)
+        (run_dir / "reverse.json").unlink(missing_ok=True)
         (run_dir / "bulk").mkdir()
     except OSError as e:
         log.error("cannot write in %s: %s", run_dir, e)
@@ -241,6 +249,28 @@ def main(argv=None):
                 datasets.append({"name": "terminated_postcodes", "collection": "raw_terminated_postcodes",
                                  "format": "json", "records_path": "responses", "key_field": "query",
                                  "files": [{"path": "terminated.json", "fetch_date": now_iso(), "published_date": None}]})
+
+            # terminated postcodes have coordinates but no district: nearest live postcode
+            located = [(r["query"], r["response"]["result"]) for r in responses
+                       if r["response"].get("status") == 200 and r["response"].get("result")
+                       and r["response"]["result"].get("latitude") is not None]
+            reverse = []
+            for i in range(0, len(located), MAX_BULK):
+                batch = located[i:i + MAX_BULK]
+                geolocations = [{"longitude": res["longitude"], "latitude": res["latitude"],
+                                 "radius": args.reverse_radius, "limit": 1} for _, res in batch]
+                r = request_with_retries(session, "POST", f"{API_URL}/postcodes", json={"geolocations": geolocations})
+                items = r.json()["result"]
+                if len(items) != len(batch):
+                    raise ValueError(f"reverse lookup: {len(batch)} sent, {len(items)} answered")
+                reverse += [{"query": postcode, "longitude": res["longitude"], "latitude": res["latitude"],
+                             "response": item} for (postcode, res), item in zip(batch, items)]
+                time.sleep(args.pause)
+            if reverse:
+                (run_dir / "reverse.json").write_text(json.dumps({"responses": reverse}), encoding="utf-8")
+                datasets.append({"name": "reverse_postcodes", "collection": "raw_reverse_postcodes",
+                                 "format": "json", "records_path": "responses", "key_field": "query",
+                                 "files": [{"path": "reverse.json", "fetch_date": now_iso(), "published_date": None}]})
     except (PyMongoError, OSError, RuntimeError, ValueError, KeyError):
         log.exception("script failed, no manifest written")
         return EXIT_FAILURE
@@ -248,19 +278,22 @@ def main(argv=None):
         client.close()
 
     terminated = sum(1 for r in responses if r["response"].get("status") == 200)
+    reverse_found = sum(1 for r in reverse if r["response"].get("result"))
     manifest = {
         "source": "postcodes",
         "run_id": run_id,
         "sample": sample,
         "scraped_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "params": {"source_runs": source_runs, "max_age_days": args.max_age_days},
+        "params": {"source_runs": source_runs, "max_age_days": args.max_age_days,
+                   "reverse_radius": args.reverse_radius},
         "counts": {"wanted": len(wanted), "fetched": len(to_fetch), "not_found_in_bulk": len(not_found),
-                   "terminated_found": terminated},
+                   "terminated_found": terminated, "reverse_found": reverse_found},
         "datasets": datasets,
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    log.info("done: %d postcodes fetched (%d not found, %d of them terminated postcodes), manifest in %s",
-             len(to_fetch), len(not_found), terminated, run_dir)
+    log.info("done: %d postcodes fetched (%d not found, %d of them terminated postcodes, %d with a live "
+             "postcode within %d m), manifest in %s",
+             len(to_fetch), len(not_found), terminated, reverse_found, args.reverse_radius, run_dir)
     return EXIT_OK
 
 
