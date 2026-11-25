@@ -2,7 +2,7 @@
 
 Data engineering project running on Apache Airflow 3.3.1 (CeleryExecutor) with Docker Compose.
 
-The `example_*` DAGs and `docker_scripts/example_script` are **examples** and templates to copy from, see [Writing your own script](#writing-your-own-script). The two **landing DAGs** (`fsa_landing` and `ofsted_landing`) are the first real part of the project: they scrape the UK food hygiene ratings (FSA) and the school inspections (Ofsted) and store them, as received, in MongoDB. See [Landing DAGs](#landing-dags-fsa-and-ofsted-scraping-into-mongodb). The warehouse schema is implemented in DuckDB. Staging, warehouse data loading and reporting are not implemented yet.
+The `example_*` DAGs and `docker_scripts/example_script` are **examples** and templates to copy from, see [Writing your own script](#writing-your-own-script). The two **landing DAGs** (`fsa_landing` and `ofsted_landing`) are the first real part of the project: they scrape the UK food hygiene ratings (FSA) and the school inspections (Ofsted) and store them, as received, in MongoDB. See [Landing DAGs](#landing-dags-fsa-and-ofsted-scraping-into-mongodb). **Staging** (MongoDB → typed, checked PostgreSQL tables in `project-db`) is implemented and orchestrated by the `staging_load` DAG, see [Staging](#staging). The warehouse schema is implemented in DuckDB. Warehouse data loading and reporting are not implemented yet.
 
 ## Contents
 
@@ -16,6 +16,7 @@ The `example_*` DAGs and `docker_scripts/example_script` are **examples** and te
   - [6. Run a DAG](#6-run-a-dag)
   - [Landing DAGs: FSA and Ofsted scraping into MongoDB](#landing-dags-fsa-and-ofsted-scraping-into-mongodb)
 - [Writing your own script](#writing-your-own-script)
+- [Staging](#staging)
 - [Warehouse setup](#warehouse-setup)
 
 ## Services
@@ -25,7 +26,7 @@ The `example_*` DAGs and `docker_scripts/example_script` are **examples** and te
 | `airflow-apiserver` | Airflow UI / API | http://localhost:8080 |
 | `postgres` | Airflow metadata DB | internal only |
 | `redis` | Celery broker | internal only |
-| `project-db` | Project data DB (Postgres 18) | `localhost:5433` from the host, `project-db:5432` from containers |
+| `project-db` | Project data DB (Postgres 18): the `raw` and `staging` schemas of the staging phase | `localhost:5433` from the host, `project-db:5432` from containers |
 | `project-mongo` | Project document DB (MongoDB 8): the landing zone of the landing DAGs | `localhost:27018` from the host, `project-mongo:27017` from containers |
 | `project-redis` | The Authority queue of the FSA landing runs (Redis 7.2, saved to disk), unrelated to Airflow's `redis` | `localhost:6380` from the host, `project-redis:6379` from containers |
 
@@ -282,6 +283,36 @@ To run the example script by hand, outside of Airflow (merging the main compose 
 
 ```bash
 docker compose -f docker-compose.yaml -f docker-compose.scripts.yaml run --rm example-script --n-rows 500
+```
+
+## Staging
+
+Staging reads the landed runs from MongoDB and builds the `staging.stg_*` tables in `project-db`: typed
+values, schools matched to FSA authorities through their postcode (postcodes.io), one row per inspection
+measure, and data-quality checks whose results and quarantined rows are kept in tables. It runs as two script
+images, `staging-loader` (`docker_scripts/staging_loader`, all cleaning in SQL) and `postcode-scraper`
+(`docker_scripts/postcode_scraper`, the postcodes.io lookups, landed like any source), orchestrated by the DAG
+`staging_load` (Mondays 08:00 and the 14th 09:00 UTC, after the landing DAGs; params `fsa_run` / `ofsted_run`
+to stage one given run, e.g. a sample run).
+
+Everything about it is in [`docs/staging/`](docs/staging/README.md):
+
+- [how it is built and run](docs/staging/README.md), step by step;
+- [what the warehouse can rely on](docs/staging/warehouse-contract.md);
+- [corrections to the report's data dictionary](docs/staging/data-dictionary-changes.md) and
+  [data-quality results](docs/staging/dq-results.md);
+- the decisions: [ADR 0003](docs/adr/0003-schools-matched-to-fsa-districts-by-postcode.md),
+  [0004](docs/adr/0004-staging-quarantines-rows-and-fails-whole-runs.md),
+  [0005](docs/adr/0005-staging-keeps-history-and-tracks-last-seen.md).
+
+Quick start (with `project-db` and `project-mongo` up and a landed run `R`):
+
+```bash
+docker compose -f docker-compose.scripts.yaml build staging-loader postcode-scraper
+docker run --rm --network de-project_default -e DB_HOST=project-db -e DB_PORT=5432 -e DB_NAME=project \
+  -e DB_USER=project -e DB_PASSWORD=devpassword -e MONGO_HOST=project-mongo -e MONGO_PORT=27017 \
+  -e MONGO_DB=project -e MONGO_USER=project -e MONGO_PASSWORD=devpassword staging-loader:latest init
+# then copy-raw / stage --step ... --run-id R, in the order given in docs/staging/README.md
 ```
 
 ## Warehouse setup

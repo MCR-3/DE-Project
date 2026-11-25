@@ -2,8 +2,8 @@
 
 Staging turns the landed MongoDB documents (see the landing DAGs) into typed, checked PostgreSQL tables in
 `project-db`, ready for the warehouse. It is implemented by one script image, `docker_scripts/staging_loader`
-(and, for the geocoding, the landing script `docker_scripts/postcode_scraper`). It is not wired into Airflow
-yet (TODO: a `staging_load` DAG).
+(and, for the geocoding, the landing script `docker_scripts/postcode_scraper`), orchestrated by the Airflow DAG
+`staging_load` (`dags/staging_load.py`).
 
 | Document | For |
 | --- | --- |
@@ -41,7 +41,50 @@ PostgreSQL schemas in `project-db`:
 - `staging`: the `stg_*` tables, the bookkeeping tables (`stg_dq_result`, `stg_quarantine`, `stg_load_log`) and
   the view `v_dq_report`.
 
-## Running it
+## In Airflow: the `staging_load` DAG
+
+One DAG for the three sources; every task is a `DockerOperator` (images `staging-loader`, `postcode-scraper`,
+`mongo-loader`) with the credentials of the Airflow connections `project-db` and `project-mongo`:
+
+```
+init ─┬─ copy_raw_fsa ── reference ── establishments ─┬─ fsa_measures ───────┬─ finalize_fsa
+      └─ copy_raw_ofsted ── schools ──────────────────┤  ofsted_inspections ─┼─ finalize_ofsted
+                                                      └─ scrape_postcodes ── load_postcodes ── copy_raw_postcodes ── geo ─┴─ finalize_postcodes
+```
+
+(`finalize_fsa` and `finalize_ofsted` also wait for `geo`.)
+
+- **Schedule**: Mondays 08:00 UTC (after `fsa_landing`, Mondays 02:00) and the 14th 09:00 UTC (after
+  `ofsted_landing`, 14th 06:00), plus manual runs. The landing DAGs do not trigger it (they stay independent,
+  ADR 0001); each run stages every full run not finalized yet, and the steps of a source with nothing new
+  return at once. `max_active_runs=1`.
+- **Params** `fsa_run` / `ofsted_run`: stage that run only (a sample run too); empty = every pending full run.
+  The postcode run is the DAG run's own id (`YYYYMMDDTHHMMSS`), looked up for the latest runs (or the given
+  ones).
+- A failed run-level check fails its task; the following tasks of that source do not run, and the run stays
+  pending (not in `stg_load_log`) until it is fixed and staged again. Retries: 1 (every step is idempotent).
+- Caveat: a landing run still loading (or failed half-way) when the schedule fires is taken as complete, see
+  open question 2 below. Keep the landing DAGs finished before 08:00 / 09:00.
+
+### Test status (2026-11-26)
+
+- **Verified by hand, without Airflow** (the command sequence below, with `project-db`, `project-mongo` and
+  `project-redis` only): an FSA sample run (`la_ids` 321, 326, 397) landed and staged end to end with the
+  Ofsted full run and a postcode run; every step exit 0, `raw.*` empty afterwards. Staging the same three
+  runs a second time left every `raw` / `staging` table count unchanged (only `stg_dq_result` is rewritten
+  per step, same count) and made 0 postcodes.io calls. The counts were also unchanged after
+  `docker compose down` / `up` (volumes kept).
+- **Not verified yet: the `staging_load` DAG inside Airflow.** It parses (DagBag, 0 errors, task order
+  checked) but has never been triggered. The full Airflow stack plus `project-db` / `project-mongo` needs
+  more than the 4 GB of WSL memory it was developed on; test it on a machine with at least 6 GB for Docker:
+  create the three connections, trigger `staging_load` with `fsa_run` = a landed sample run, check that every
+  task succeeds and `SELECT * FROM staging.v_dq_report` shows the run, then trigger it again and check the
+  counts do not change.
+- **Not verified yet: a full FSA run** (about 500 MB of raw JSON in `raw.fsa_establishments`), for the
+  same memory reason. Run it on the same machine (trigger `fsa_landing` unticked, then `staging_load` with
+  empty params), and afterwards regenerate `dq-results.md`, which still shows test data.
+
+## Running it by hand
 
 Environment (injected from the Airflow connections `project-db` and `project-mongo`): `DB_HOST`, `DB_PORT`,
 `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `MONGO_HOST`, `MONGO_PORT`, `MONGO_DB`, `MONGO_USER`, `MONGO_PASSWORD`.
