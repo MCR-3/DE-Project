@@ -1,0 +1,200 @@
+"""Staging: turn the landed MongoDB documents into typed PostgreSQL tables (project-db).
+
+Meant to run in its own container, launched by the staging DAG. Python only moves data; all the
+cleaning, the data-quality checks and the unpivoting are SQL (the files of sql/, run in order).
+
+Sub-commands:
+    init        Create the `raw` and `staging` schemas, their tables and the cleaning functions
+                (sql/0*.sql, all idempotent), reload the seeds (seeds/*.csv) and create the MongoDB
+                quarantine collection's unique index. Safe to run again at any time.
+    copy-raw    Copy the documents of the runs to stage from MongoDB to raw.* (JSONB), streamed in
+                batches. Without --run-id: every full run (`sample: false`) of the source that is not
+                in staging.stg_load_log yet, oldest first. With --run-id: that run only, sample or not
+                (for tests). Copying a run again is a no-op (primary key (run_id, source_key)).
+
+  * Configuration from the environment: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD (Airflow
+    connection `project-db`), MONGO_HOST, MONGO_PORT, MONGO_DB, MONGO_USER, MONGO_PASSWORD (connection
+    `project-mongo`), optional MONGO_AUTH_SOURCE (default `admin`).
+  * Exit code: 0 ok, 1 failure, 2 bad config (non-zero makes the Airflow task fail).
+"""
+
+import argparse
+import logging
+import os
+import sys
+from pathlib import Path
+
+import psycopg2
+from psycopg2.extras import Json, execute_values
+from pymongo import ASCENDING, MongoClient
+from pymongo.errors import PyMongoError
+
+log = logging.getLogger("staging_loader")
+
+EXIT_OK = 0
+EXIT_FAILURE = 1
+EXIT_BAD_CONFIG = 2
+
+BATCH_SIZE = 1000
+HERE = Path(__file__).resolve().parent
+SQL_DIR = HERE / "sql"
+SEED_DIR = HERE / "seeds"
+
+QUARANTINE_COLLECTION = "stg_quarantine"
+
+# seeds/<file> -> staging table (reloaded in full by `init`)
+SEEDS = {
+    "region_map.csv": "staging.stg_region_map",
+    "district_la_map.csv": "staging.stg_district_la_map",
+}
+
+# source -> MongoDB collections of one of its runs; the first one decides which runs exist
+SOURCES = {
+    "fsa": ["raw_fsa_establishments", "raw_fsa_authorities", "raw_fsa_business_types",
+            "raw_fsa_ratings", "raw_fsa_score_descriptors"],
+    "ofsted": ["raw_ofsted_schools"],
+}
+
+ENVELOPE = ["run_id", "source_key", "source", "dataset", "sample", "ingested_at",
+            "fetch_date", "published_date", "payload"]
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Stage the landed MongoDB data into PostgreSQL.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("init", help="create schemas, tables, functions, seeds and the quarantine index")
+    copy = sub.add_parser("copy-raw", help="copy the runs to stage from MongoDB to raw.*")
+    copy.add_argument("--source", required=True, choices=sorted(SOURCES))
+    copy.add_argument("--run-id", help="copy this run only, sample or not (default: every pending full run)")
+    return parser.parse_args(argv)
+
+
+def pg_connect():
+    """psycopg2 connection from DB_* environment variables (raises KeyError if unset)."""
+    return psycopg2.connect(
+        host=os.environ["DB_HOST"], port=int(os.environ["DB_PORT"]), dbname=os.environ["DB_NAME"],
+        user=os.environ["DB_USER"], password=os.environ["DB_PASSWORD"], connect_timeout=10,
+    )
+
+
+def mongo_db():
+    """The project MongoDB database from MONGO_* environment variables (raises KeyError if unset)."""
+    client = MongoClient(
+        host=os.environ["MONGO_HOST"], port=int(os.environ["MONGO_PORT"]),
+        username=os.environ["MONGO_USER"], password=os.environ["MONGO_PASSWORD"],
+        authSource=os.environ.get("MONGO_AUTH_SOURCE", "admin"), serverSelectionTimeoutMS=10_000,
+    )
+    return client, client[os.environ["MONGO_DB"]]
+
+
+def raw_table(collection):
+    """raw_fsa_establishments -> raw.fsa_establishments"""
+    return "raw." + collection.removeprefix("raw_")
+
+
+# --------------------------------------------------------------------------------------------- init
+
+def run_init(pg, db):
+    with pg, pg.cursor() as cur:  # one transaction: all or nothing
+        for path in sorted(SQL_DIR.glob("0*.sql")):
+            log.info("applying %s", path.name)
+            cur.execute(path.read_text(encoding="utf-8"))
+        for file_name, table in SEEDS.items():
+            cur.execute(f"TRUNCATE {table}")
+            with (SEED_DIR / file_name).open(encoding="utf-8") as f:
+                cur.copy_expert(f"COPY {table} FROM STDIN WITH (FORMAT csv, HEADER true)", f)
+            cur.execute(f"SELECT count(*) FROM {table}")
+            log.info("seed %s: %d rows in %s", file_name, cur.fetchone()[0], table)
+    db[QUARANTINE_COLLECTION].create_index(
+        [("stage", ASCENDING), ("run_id", ASCENDING), ("source_key", ASCENDING)],
+        unique=True, name="stage_run_id_source_key",
+    )
+    log.info("MongoDB %s.%s: unique index (stage, run_id, source_key) ready", db.name, QUARANTINE_COLLECTION)
+
+
+# ----------------------------------------------------------------------------------------- copy-raw
+
+def pending_runs(pg, db, source):
+    """Full runs of the source in MongoDB that staging has not finished yet, oldest first."""
+    landed = db[SOURCES[source][0]].distinct("run_id", {"sample": False})
+    with pg.cursor() as cur:
+        cur.execute("SELECT run_id FROM staging.stg_load_log WHERE source = %s", (source,))
+        staged = {row[0] for row in cur.fetchall()}
+    return sorted(r for r in landed if r not in staged)
+
+
+def copy_collection(pg, db, collection, run_id):
+    """Copy one run of one collection; returns (documents in MongoDB, rows in raw after the copy)."""
+    table = raw_table(collection)
+    sql = f"INSERT INTO {table} ({', '.join(ENVELOPE)}) VALUES %s ON CONFLICT (run_id, source_key) DO NOTHING"
+    cursor = db[collection].find({"run_id": run_id}, {"_id": 0}, batch_size=BATCH_SIZE)
+    total, batch = 0, []
+    with pg, pg.cursor() as cur:  # one transaction per collection and run
+        for doc in cursor:
+            missing = [f for f in ENVELOPE if f not in doc]
+            if missing:
+                raise ValueError(f"{collection} run {run_id}: a document has no {missing} "
+                                 f"(landed before the sample / fetch_date fields?)")
+            batch.append(tuple(Json(doc[f]) if f == "payload" else doc[f] for f in ENVELOPE))
+            if len(batch) >= BATCH_SIZE:
+                execute_values(cur, sql, batch, page_size=BATCH_SIZE)
+                total, batch = total + len(batch), []
+        if batch:
+            execute_values(cur, sql, batch, page_size=BATCH_SIZE)
+            total += len(batch)
+        cur.execute(f"SELECT count(*) FROM {table} WHERE run_id = %s", (run_id,))
+        copied = cur.fetchone()[0]
+    return total, copied
+
+
+def run_copy_raw(pg, db, source, run_id=None):
+    runs = [run_id] if run_id else pending_runs(pg, db, source)
+    if not runs:
+        log.info("%s: no pending full run to copy", source)
+        return
+    log.info("%s: %d run(s) to copy: %s", source, len(runs), ", ".join(runs))
+    for run in runs:
+        for collection in SOURCES[source]:
+            documents, copied = copy_collection(pg, db, collection, run)
+            if documents != copied:
+                raise ValueError(f"{collection} run {run}: {documents} documents in MongoDB "
+                                 f"but {copied} rows in {raw_table(collection)}")
+            if documents == 0:
+                log.warning("%s run %s: no document", collection, run)
+            log.info("%s run %s: %d documents -> %s", collection, run, documents, raw_table(collection))
+
+
+# --------------------------------------------------------------------------------------------- main
+
+def main(argv=None):
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    args = parse_args(argv)
+    try:
+        pg = pg_connect()
+        client, db = mongo_db()
+    except (KeyError, ValueError) as missing:
+        log.error("missing or invalid environment variable %s", missing)
+        return EXIT_BAD_CONFIG
+    except psycopg2.OperationalError as e:
+        log.error("cannot connect to PostgreSQL: %s", e)
+        return EXIT_FAILURE
+
+    try:
+        if args.command == "init":
+            run_init(pg, db)
+        elif args.command == "copy-raw":
+            run_copy_raw(pg, db, args.source, args.run_id)
+    except (psycopg2.Error, PyMongoError, OSError, ValueError):
+        log.exception("script failed")
+        return EXIT_FAILURE
+    finally:
+        pg.close()
+        client.close()
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

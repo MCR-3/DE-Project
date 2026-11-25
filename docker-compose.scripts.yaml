@@ -33,6 +33,10 @@ services:
     volumes:
       - ./data:/data
 
+  staging-loader:
+    build: ./docker_scripts/staging_loader
+    image: staging-loader:latest
+
   # Add each new script the same way:
   # another-script:
   #   build: ./docker_scripts/another_script
