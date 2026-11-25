@@ -68,3 +68,11 @@ LANGUAGE sql IMMUTABLE AS $$
     SELECT CASE WHEN staging.is_full_postcode(v)
                 THEN left(staging.normalise_postcode(v), length(staging.normalise_postcode(v)) - 2) END
 $$;
+
+-- TRUE if the step ran for the run and none of its run-level checks failed (stg_dq_result)
+CREATE OR REPLACE FUNCTION staging.stage_passed(p_run_id TEXT, p_stage TEXT) RETURNS BOOLEAN
+LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM staging.stg_dq_result WHERE run_id = p_run_id AND stage = p_stage)
+       AND NOT EXISTS (SELECT 1 FROM staging.stg_dq_result
+                       WHERE run_id = p_run_id AND stage = p_stage AND severity = 'run' AND failed_count > 0)
+$$;

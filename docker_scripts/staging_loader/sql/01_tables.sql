@@ -259,10 +259,11 @@ CREATE TABLE IF NOT EXISTS staging.stg_inspection_measure (
 -- staging: bookkeeping
 ----------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS staging.stg_load_log (
-    source      VARCHAR(10) NOT NULL,                    -- fsa / ofsted
+    source      VARCHAR(10) NOT NULL,                    -- fsa / ofsted / postcodes
     run_id      TEXT        NOT NULL,
-    loaded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),      -- written last: a run without a row is not staged yet
-    row_counts  JSONB,
+    sample      BOOLEAN     NOT NULL,                    -- the latest full run of a source = latest row with sample false
+    loaded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),      -- written last (finalize step): a run without a row is not staged yet
+    row_counts  JSONB,                                   -- source / loaded / quarantined / newer counts of the finalize step
     PRIMARY KEY (source, run_id)
 );
 
