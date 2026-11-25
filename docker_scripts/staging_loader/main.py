@@ -16,7 +16,7 @@ Sub-commands:
                 staging.stg_dq_result and committed even when they fail; then, only if no run-level
                 check failed, the load (row-level problems go to staging.stg_quarantine in the same
                 transaction). A failed run-level check exits 1 with nothing loaded.
-                Steps: reference (step 1, FSA), schools (step 2, Ofsted).
+                Steps: reference (step 1, FSA), schools (step 2, Ofsted), establishments (step 3, FSA).
 
   * Configuration from the environment: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD (Airflow
     connection `project-db`), MONGO_HOST, MONGO_PORT, MONGO_DB, MONGO_USER, MONGO_PASSWORD (connection
@@ -62,6 +62,8 @@ STEPS = {
                   ["staging.stg_local_authority", "staging.stg_business_type",
                    "staging.stg_fsa_rating", "staging.stg_fsa_score_descriptor"]),
     "schools": ("ofsted", "20_schools.sql", ["staging.stg_school"]),
+    "establishments": ("fsa", "30_establishments.sql",
+                       ["staging.stg_food_establishment", "staging.stg_fsa_inspection"]),
 }
 
 

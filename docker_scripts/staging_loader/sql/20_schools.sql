@@ -42,6 +42,7 @@ SELECT r.source_key, r.sample, r.payload,
        staging.ofsted_null(r.payload->>'Multi-academy trust name')  AS mat_name,
        staging.ofsted_null(r.payload->>'Web Link')                  AS report_url,
        CASE WHEN r.published_date ~ '^\d{4}-\d{2}-\d{2}' THEN left(r.published_date, 10)::DATE END AS published_date,
+       CASE WHEN r.fetch_date ~ '^\d{4}-\d{2}-\d{2}' THEN left(r.fetch_date, 10)::DATE END AS seen_date,
        count(*) OVER (PARTITION BY staging.to_int(staging.ofsted_null(r.payload->>'URN'))) AS urn_copies
 FROM raw.ofsted_schools r
 LEFT JOIN staging.stg_region_map m
@@ -110,6 +111,11 @@ SELECT current_setting('staging.run_id'), 'schools', 'source_rows', 'run',
        source_rows, coalesce(sample, FALSE)
 FROM stats
 UNION ALL
+-- run-level: the landing envelope has no readable fetch date (needed for last_seen_date)
+SELECT current_setting('staging.run_id'), 'schools', 'fetch_date_invalid', 'run',
+       (SELECT count(*) FROM school_src WHERE seen_date IS NULL), NULL, coalesce(sample, FALSE)
+FROM stats
+UNION ALL
 -- run-level: more than 5 % of the rows quarantined (format change, broken file)
 SELECT current_setting('staging.run_id'), 'schools', 'quarantine_rate', 'run',
        CASE WHEN source_rows > 0 AND quarantined > 0.05 * source_rows THEN 1 ELSE 0 END,
@@ -138,11 +144,12 @@ SELECT current_setting('staging.run_id'), 'schools', source_key, reasons, payloa
 INSERT INTO staging.stg_school AS t
     (urn, laestab, school_name, ofsted_phase, type_of_education, open_date, has_sixth_form,
      postcode, postcode_sector, local_authority_name, region, idaci_quintile, total_pupils,
-     statutory_lowest_age, statutory_highest_age, mat_name, report_url, published_date, run_id, loaded_at)
+     statutory_lowest_age, statutory_highest_age, mat_name, report_url, published_date, run_id,
+     last_seen_run_id, last_seen_date, loaded_at)
 SELECT s.urn, s.laestab, s.school_name, s.ofsted_phase, s.type_of_education, s.open_date, s.has_sixth_form,
        s.postcode, s.postcode_sector, s.local_authority_name, s.region, s.idaci_quintile, s.total_pupils,
        s.statutory_lowest_age, s.statutory_highest_age, s.mat_name, s.report_url, s.published_date,
-       current_setting('staging.run_id'), now()
+       current_setting('staging.run_id'), current_setting('staging.run_id'), s.seen_date, now()
 FROM school_src s
 WHERE NOT EXISTS (SELECT 1 FROM school_problem p WHERE p.source_key = s.source_key)
 ON CONFLICT (urn) DO UPDATE SET
@@ -154,6 +161,7 @@ ON CONFLICT (urn) DO UPDATE SET
     statutory_lowest_age = EXCLUDED.statutory_lowest_age, statutory_highest_age = EXCLUDED.statutory_highest_age,
     mat_name = EXCLUDED.mat_name, report_url = EXCLUDED.report_url, published_date = EXCLUDED.published_date,
     run_id = EXCLUDED.run_id, loaded_at = EXCLUDED.loaded_at,
+    last_seen_run_id = EXCLUDED.last_seen_run_id, last_seen_date = EXCLUDED.last_seen_date,
     -- a new postcode means the step 4 geocoding is stale
     latitude            = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.latitude END,
     longitude           = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.longitude END,
@@ -161,4 +169,13 @@ ON CONFLICT (urn) DO UPDATE SET
     admin_district_code = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.admin_district_code END,
     admin_district_name = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.admin_district_name END,
     admin_county_code   = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.admin_county_code END,
-    admin_county_name   = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.admin_county_name END;
+    admin_county_name   = CASE WHEN t.postcode IS DISTINCT FROM EXCLUDED.postcode THEN NULL ELSE t.admin_county_name END
+-- an older run staged again by hand never overwrites a newer one
+WHERE EXCLUDED.last_seen_date >= t.last_seen_date;
+
+-- schools quarantined in this run still appeared in the source: they are not closed
+UPDATE staging.stg_school t
+SET last_seen_run_id = current_setting('staging.run_id'), last_seen_date = s.seen_date
+FROM school_src s
+JOIN school_problem p ON p.source_key = s.source_key
+WHERE s.urn = t.urn AND s.urn_copies = 1 AND s.seen_date >= t.last_seen_date;

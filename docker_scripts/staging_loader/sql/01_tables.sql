@@ -120,7 +120,9 @@ CREATE TABLE IF NOT EXISTS staging.stg_school (
     mat_name               VARCHAR(150),
     report_url             VARCHAR(300),
     published_date         DATE,                         -- "as at" date of the Ofsted release (replaces source_file)
-    run_id                 TEXT         NOT NULL,
+    run_id                 TEXT         NOT NULL,        -- run that last wrote the values
+    last_seen_run_id       TEXT         NOT NULL,        -- last run the school appeared in (even if quarantined there)
+    last_seen_date         DATE         NOT NULL,        -- fetch date of that run; older than the latest full run = gone from the source
     loaded_at              TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
@@ -140,9 +142,10 @@ CREATE TABLE IF NOT EXISTS staging.stg_food_establishment (
     longitude            NUMERIC(9,6),
     coord_source         VARCHAR(12)  CHECK (coord_source IN ('fsa', 'postcodes_io')),
     la_code              VARCHAR(10)  NOT NULL REFERENCES staging.stg_local_authority (la_code),
-    last_fetch_date      DATE         NOT NULL,          -- fetch date of the latest run the business appeared in
     published_date       TIMESTAMP,                      -- LastPublishedDate of its authority in that run
-    run_id               TEXT         NOT NULL,
+    run_id               TEXT         NOT NULL,          -- run that last wrote the values
+    last_seen_run_id     TEXT         NOT NULL,          -- last run the business appeared in (even if quarantined there)
+    last_seen_date       DATE         NOT NULL,          -- fetch date of that run; older than the latest full run = gone from the source
     loaded_at            TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
