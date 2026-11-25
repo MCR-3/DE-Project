@@ -134,6 +134,23 @@ services:
       retries: 5
       start_period: 20s
 
+  project-redis:
+    # The Authority queue of the FSA landing runs (see docs/adr/0002), unrelated to Airflow's own
+    # Redis (the Celery broker below). Same 7.2 image, for the same licensing reason.
+    image: redis:7.2-bookworm
+    # appendonly: the queue survives a restart of the container or of the host.
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "devpassword"]
+    ports:
+      - "6380:6379"   # 6379 is often taken by a local redis; containers use project-redis:6379
+    volumes:
+      - project_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "devpassword", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 5s
+
   redis:
     # Redis is limited to 7.2-bookworm due to licencing change
     # https://redis.io/blog/redis-adopts-dual-source-available-licensing/
@@ -366,3 +383,4 @@ volumes:
   postgres-db-volume:
   project_pg_data:
   project_mongo_data:
+  project_redis_data:

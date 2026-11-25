@@ -27,6 +27,7 @@ The `example_*` DAGs and `docker_scripts/example_script` are **examples** and te
 | `redis` | Celery broker | internal only |
 | `project-db` | Project data DB (Postgres 18) | `localhost:5433` from the host, `project-db:5432` from containers |
 | `project-mongo` | Project document DB (MongoDB 8): the landing zone of the landing DAGs | `localhost:27018` from the host, `project-mongo:27017` from containers |
+| `project-redis` | The Authority queue of the FSA landing runs (Redis 7.2, saved to disk), unrelated to Airflow's `redis` | `localhost:6380` from the host, `project-redis:6379` from containers |
 
 The repository's `data/` folder is mounted at `/opt/airflow/data` in every Airflow container. DAGs use it for the files they produce (its content is git-ignored).
 
@@ -113,7 +114,7 @@ Notes:
 - The credentials above are the development values defined in `docker-compose.yaml` (`POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` of `project-db`). Update them here if you change the compose file.
 - The connection ID must match exactly what the DAGs reference (`Connection.get("project-db")`, `conn_id="project-db"`).
 
-**`project-mongo`**: project MongoDB, used by the second task of both landing DAGs. They do not load in the UI until this connection exists.
+**`project-mongo`**: project MongoDB, used by the `load_into_mongo` task of both landing DAGs. They do not load in the UI until this connection exists.
 
 | Field | Value |
 | --- | --- |
@@ -127,6 +128,18 @@ Notes:
 
 The credentials are the development values of the `project-mongo` service (`MONGO_INITDB_ROOT_USERNAME` / `MONGO_INITDB_ROOT_PASSWORD` in `docker-compose.yaml`). From your machine, connect with `mongosh "mongodb://project:devpassword@localhost:27018/?authSource=admin"`.
 
+**`project-redis`**: the Redis that holds the FSA Authority queue, used by every FSA scraping task of `fsa_landing`. The DAG does not load in the UI until this connection exists.
+
+| Field | Value |
+| --- | --- |
+| Connection ID | `project-redis` |
+| Connection Type | `Generic` |
+| Host | `project-redis` |
+| Password | `devpassword` |
+| Port | `6379` |
+
+The password is the development value of the `project-redis` service (`--requirepass` in `docker-compose.yaml`). From your machine: `docker compose exec project-redis redis-cli -a devpassword`.
+
 ### 5. Build the example script image
 
 The `example_docker_script` DAG launches `docker_scripts/example_script` (and the landing DAGs launch `docker_scripts/fsa_scraper` or `docker_scripts/ofsted_scraper`, then `docker_scripts/mongo_loader`) in its own container through `DockerOperator`, so the images must exist locally. Build every image declared in `docker-compose.scripts.yaml`:
@@ -135,7 +148,7 @@ The `example_docker_script` DAG launches `docker_scripts/example_script` (and th
 docker compose -f docker-compose.scripts.yaml build
 ```
 
-The DAG reads the network the launched container joins from the `DOCKER_NETWORK` variable in `.env`, which is empty by default. For `project-db` (and `project-mongo`, for the landing DAGs) to resolve from that container, set it to the Compose network of this project. Find it with `docker network ls` (it is `<folder-name>_default`, e.g. `de-project_default`), then recreate the containers (`docker compose up -d`) so they pick up the change.
+The DAG reads the network the launched container joins from the `DOCKER_NETWORK` variable in `.env`, which is empty by default. For `project-db` (and `project-mongo` and `project-redis`, for the landing DAGs) to resolve from that container, set it to the Compose network of this project. Find it with `docker network ls` (it is `<folder-name>_default`, e.g. `de-project_default`), then recreate the containers (`docker compose up -d`) so they pick up the change.
 
 ### 6. Run a DAG
 
@@ -143,16 +156,16 @@ DAGs are created paused. In the UI, un-pause the DAG you want and trigger it (`e
 
 ### Landing DAGs: FSA and Ofsted scraping into MongoDB
 
-The landing phase fetches the two source datasets and stores them **as received** in MongoDB (nothing is typed, cleaned or filtered; that is the job of the later staging phase). There is one DAG per source, each with two tasks, each task in its own container:
+The landing phase fetches the two source datasets and stores them **as received** in MongoDB (nothing is typed, cleaned or filtered; that is the job of the later staging phase). There is one DAG per source, each task in its own container:
 
-| DAG | Schedule | Task 1 (scrape) | Task 2 |
+| DAG | Schedule | Scraping | Loading |
 | --- | --- | --- | --- |
-| `fsa_landing` ("FSA landing") | weekly, Mondays at 02:00 UTC (the FSA asks for bulk retrievals between 01:00 and 06:00) | `scrape_fsa`: `docker_scripts/fsa_scraper` | `load_into_mongo`: `docker_scripts/mongo_loader` |
+| `fsa_landing` ("FSA landing") | weekly, Mondays at 02:00 UTC (the FSA asks for bulk retrievals between 01:00 and 06:00) | `prepare_fsa`, then `fetch_fsa` × `fetchers`, then `finalize_fsa`: `docker_scripts/fsa_scraper` | `load_into_mongo`: `docker_scripts/mongo_loader` |
 | `ofsted_landing` ("Ofsted landing") | monthly, on the 14th at 06:00 UTC (Ofsted publishes around the 10th-13th) | `scrape_ofsted`: `docker_scripts/ofsted_scraper` | `load_into_mongo`: `docker_scripts/mongo_loader` |
 
 Like every DAG they are created paused and have `catchup=False`; the tasks retry twice, 5 minutes apart. The DAGs' ids and display names are defined in one file, `dags/dag_names.py`. They do not use `project-db`.
 
-**What the scrapers save.** Each run has its own folder, `data/landing/<source>/<run>/` (`<run>` is the run's logical date, e.g. `20261120T020000`, the same for both tasks and for retries). The scraper writes `manifest.json` last: a folder without it is an unfinished run, which the loader refuses.
+**What the scrapers save.** Each run has its own folder, `data/landing/<source>/<run>/` (`<run>` is the run's logical date, e.g. `20261120T020000`, the same for every task and for retries). The scraper writes `manifest.json` last: a folder without it is an unfinished run, which the loader refuses.
 
 ```
 data/landing/fsa/20261120T020000/
@@ -160,7 +173,9 @@ data/landing/fsa/20261120T020000/
   business_types.json                    GET /BusinessTypes
   ratings.json                           GET /Ratings: every possible rating (0-5 for FHRS, Pass etc. for FHIS)
   score_descriptors.json                 GET /ScoreDescriptors: the wording of every score value
+  plan.json                              the authorities the run has to fetch (written by prepare_fsa)
   establishments/la_326/page_0001.json   one file per API page of 200 establishments, per authority
+  establishments/la_326/progress.json    the pages saved so far, while the authority is being fetched
   establishments/la_326/done.json        written after the authority's last page, so a retry skips it
   manifest.json
 data/landing/ofsted/20261114T060000/
@@ -168,7 +183,14 @@ data/landing/ofsted/20261114T060000/
   manifest.json
 ```
 
-- **FSA** (`fsa_scraper`): reads the [FHRS API](https://api.ratings.food.gov.uk/help) (version 2, no key), at most 200 records per page and a pause of 0.5 s between calls, with retries on 429 and 5xx. Only English authorities are accepted (the project is limited to England). A scheduled run is a **full run**: every English authority, about 500,000 establishments and 2,600 calls, one to two hours. If it fails, the retry resumes: authorities whose `done.json` exists are not fetched again. For a test, trigger `fsa_landing` by hand with **`sample`** ticked: only the authorities of the `la_ids` parameter are fetched (comma-separated FSA `LocalAuthorityId` values; default `321,326,397`: Isles of Scilly, about 140 establishments, Bath and North East Somerset, about 1,800, and Leeds, about 7,700). Why every establishment and not only the schools: [ADR 0001](docs/adr/0001-landing-keeps-the-whole-source-scope.md).
+- **FSA** (`fsa_scraper`): reads the [FHRS API](https://api.ratings.food.gov.uk/help) (version 2, no key), at most 200 records per page, with retries on 429 and 5xx. Only English authorities are accepted (the project is limited to England). A scheduled run is a **full run**: every English authority, about 500,000 establishments and 2,600 calls. The work is shared through an **Authority queue** in `project-redis` (see [CONTEXT.md](CONTEXT.md) and [ADR 0002](docs/adr/0002-fsa-fetchers-share-a-redis-authority-queue.md)):
+  - `prepare_fsa` saves the reference files, writes `plan.json` and fills the queue, largest authority first, leaving out the authorities that already have a `done.json`.
+  - `fetch_fsa` runs `fetchers` **Fetchers** in parallel (DAG parameter, 1 to 8, default 4), one container each. Each takes one authority at a time under a 2-minute lease that it keeps renewing, and saves all its pages. A Fetcher that dies loses its lease; another one takes the authority back and resumes after its last saved page (or from page 1 if the authority has published new data in between). An authority that fails three times is set aside without stopping the others; its Fetcher fails, and puts it back in the queue when Airflow retries it.
+  - `finalize_fsa` runs even if a Fetcher failed: it checks in the files that every authority has its `done.json`, then writes the manifest; otherwise it fails and lists the missing authorities.
+  - The requests to the FSA are capped at `max_rps` per second (DAG parameter, default 4) for all the Fetchers together, and a 429 pauses every Fetcher for its Retry-After. Raising `fetchers` beyond what `max_rps` keeps busy only adds waiting.
+  - Clearing a failed run starts again from `prepare_fsa`, which rebuilds the queue from the files: finished authorities are never fetched twice.
+
+  For a test, trigger `fsa_landing` by hand with **`sample`** ticked: only the authorities of the `la_ids` parameter are fetched (comma-separated FSA `LocalAuthorityId` values; default `321,326,397`: Isles of Scilly, about 140 establishments, Bath and North East Somerset, about 1,800, and Leeds, about 7,700). Why every establishment and not only the schools: [ADR 0001](docs/adr/0001-landing-keeps-the-whole-source-scope.md).
 - **Ofsted** (`ofsted_scraper`): the gov.uk page has no stable download link, so the scraper reads the publication page and downloads the `latest_inspections` CSV with the newest date in its name. `ofsted_landing` has an optional parameter `url` to land a specific CSV (e.g. an older month) instead. All rows are kept.
 
 **What lands in MongoDB.** `mongo_loader` reads the manifest and inserts one document per record into the `project` database of `project-mongo`:
@@ -200,15 +222,23 @@ Every document carries two dates, copied from its file in the manifest (see [CON
 
 The loading is **append-only**: every run adds its documents and never changes the earlier ones, which is how the rating history builds up (the FSA API only exposes the latest rating of each business). A unique index on `(run_id, source_key)` makes a retry safe: documents already loaded for that run are skipped, not duplicated.
 
-Needs `HOST_DATA_DIR` in `.env` (see [step 1](#1-configure-the-env-file)), the `project-mongo` connection ([step 4](#4-configure-the-project-database-connection-in-the-airflow-ui)), `DOCKER_NETWORK` set to the Compose network so `project-mongo` resolves, and the `fsa-scraper`, `ofsted-scraper` and `mongo-loader` images built ([step 5](#5-build-the-example-script-image)).
+Needs `HOST_DATA_DIR` in `.env` (see [step 1](#1-configure-the-env-file)), the `project-mongo` and `project-redis` connections ([step 4](#4-configure-the-project-database-connection-in-the-airflow-ui)), `DOCKER_NETWORK` set to the Compose network so `project-mongo` and `project-redis` resolve, and the `fsa-scraper`, `ofsted-scraper` and `mongo-loader` images built ([step 5](#5-build-the-example-script-image)).
 
 To run the steps by hand, outside of Airflow:
 
 ```bash
-# scrape (writes data/landing/fsa/test/ and data/landing/ofsted/test/); by hand the FSA scraper
-# makes a sample run by default, add --no-sample for a full run
-# (--user: run as the owner of data/, i.e. AIRFLOW_UID, or the scraper cannot write there)
-docker run --rm --user "$(id -u)" -v "$PWD/data:/data" fsa-scraper:latest --run-id test --la-ids 321,326
+# scrape FSA (writes data/landing/fsa/test/): the three steps of the DAG, against project-redis.
+# By hand `prepare` makes a sample run by default, add --no-sample for a full run. Start several
+# `fetch` at once (in other terminals) to see the Fetchers share the queue.
+# (--user: run as the owner of data/, i.e. AIRFLOW_UID, or the scraper cannot write there;
+#  --network: the Compose network, so project-redis resolves)
+docker compose up -d project-redis
+FSA="docker run --rm --user $(id -u) --network de-project_default -v $PWD/data:/data -e REDIS_HOST=project-redis -e REDIS_PASSWORD=devpassword fsa-scraper:latest"
+$FSA prepare --run-id test --la-ids 321,326
+$FSA fetch --run-id test --fetcher 1
+$FSA finalize --run-id test
+
+# scrape Ofsted (writes data/landing/ofsted/test/)
 docker run --rm --user "$(id -u)" -v "$PWD/data:/data" ofsted-scraper:latest --run-id test
 
 # load a run into Mongo (starts project-mongo, joins its network through the merged compose files)
@@ -219,7 +249,7 @@ docker compose -f docker-compose.yaml -f docker-compose.scripts.yaml run --rm --
 docker compose exec project-mongo mongosh -u project -p devpassword --authenticationDatabase admin project --eval "db.raw_fsa_establishments.countDocuments()"
 ```
 
-A rerun with the same `--run-id` resumes: the authorities already completed in that folder (with the same page size) are reused, not fetched again. Delete the folder (`data/landing/fsa/test/`) for a fresh test.
+A rerun of `prepare` with the same `--run-id` resumes: the authorities already completed in that folder (with the same page size) are not queued again. To watch a run's queue: `docker compose exec project-redis redis-cli -a devpassword lrange fsa:<run>:queue 0 -1` (and `zrange fsa:<run>:leases 0 -1` for the authorities being fetched). Delete the folder (`data/landing/fsa/test/`) for a fresh test.
 
 **Data landed before `fetch_date` and `published_date`.** Earlier runs had a single `extract_date` per dataset instead (the FSA one was in fact the request time). The loader refuses their manifests, and their documents lack the two dates. Those runs were tests (FSA sample runs and one Ofsted run that can be landed again with the `url` parameter), so the landing zone is emptied rather than migrated: delete the `raw_*` collections and the folders under `data/landing/`, then trigger the landing DAGs again.
 
