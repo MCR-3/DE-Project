@@ -11,6 +11,10 @@ Sub-commands:
                 batches. Without --run-id: every full run (`sample: false`) of the source that is not
                 in staging.stg_load_log yet, oldest first. With --run-id: that run only, sample or not
                 (for tests). Copying a run again is a no-op (primary key (run_id, source_key)).
+    stage       Run one staging step (an SQL file of sql/) on the runs to stage, same run selection as
+                copy-raw (the run must be copied first). Each run is one transaction: the step's DQ
+                checks are written to staging.stg_dq_result and, if one fails, the run is rolled back
+                and the script exits 1. Steps: reference (step 1, FSA).
 
   * Configuration from the environment: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD (Airflow
     connection `project-db`), MONGO_HOST, MONGO_PORT, MONGO_DB, MONGO_USER, MONGO_PASSWORD (connection
@@ -46,6 +50,14 @@ QUARANTINE_COLLECTION = "stg_quarantine"
 SEEDS = {
     "region_map.csv": "staging.stg_region_map",
     "district_la_map.csv": "staging.stg_district_la_map",
+    "ofsted_level.csv": "staging.stg_ofsted_level",
+}
+
+# staging step -> (source, SQL file, tables whose row counts are logged after the step)
+STEPS = {
+    "reference": ("fsa", "10_reference.sql",
+                  ["staging.stg_local_authority", "staging.stg_business_type",
+                   "staging.stg_fsa_rating", "staging.stg_fsa_score_descriptor"]),
 }
 
 # source -> MongoDB collections of one of its runs; the first one decides which runs exist
@@ -66,6 +78,9 @@ def parse_args(argv=None):
     copy = sub.add_parser("copy-raw", help="copy the runs to stage from MongoDB to raw.*")
     copy.add_argument("--source", required=True, choices=sorted(SOURCES))
     copy.add_argument("--run-id", help="copy this run only, sample or not (default: every pending full run)")
+    stage = sub.add_parser("stage", help="run one staging step (SQL) on the runs to stage")
+    stage.add_argument("--step", required=True, choices=list(STEPS))
+    stage.add_argument("--run-id", help="stage this run only, sample or not (default: every pending full run)")
     return parser.parse_args(argv)
 
 
@@ -164,6 +179,30 @@ def run_copy_raw(pg, db, source, run_id=None):
             log.info("%s run %s: %d documents -> %s", collection, run, documents, raw_table(collection))
 
 
+# -------------------------------------------------------------------------------------------- stage
+
+def run_stage(pg, db, step, run_id=None):
+    source, file_name, tables = STEPS[step]
+    sql = (SQL_DIR / file_name).read_text(encoding="utf-8")
+    runs = [run_id] if run_id else pending_runs(pg, db, source)
+    if not runs:
+        log.info("%s: no pending full run to stage", step)
+        return
+    for run in runs:
+        with pg, pg.cursor() as cur:  # one transaction per run: all or nothing
+            cur.execute("SELECT set_config('staging.run_id', %s, true)", (run,))
+            cur.execute(sql)
+            cur.execute("SELECT check_name, failed_count FROM staging.stg_dq_result "
+                        "WHERE run_id = %s AND stage = %s ORDER BY check_name", (run, step))
+            checks = cur.fetchall()
+            for table in tables:
+                cur.execute(f"SELECT count(*), count(*) FILTER (WHERE run_id = %s) FROM {table}", (run,))
+                total, from_run = cur.fetchone()
+                log.info("%s run %s: %s has %d rows (%d written by this run)", step, run, table, total, from_run)
+        log.info("%s run %s: %d DQ checks passed (%s)", step, run, len(checks),
+                 ", ".join(f"{name}={count}" for name, count in checks))
+
+
 # --------------------------------------------------------------------------------------------- main
 
 def main(argv=None):
@@ -187,6 +226,8 @@ def main(argv=None):
             run_init(pg, db)
         elif args.command == "copy-raw":
             run_copy_raw(pg, db, args.source, args.run_id)
+        elif args.command == "stage":
+            run_stage(pg, db, args.step, args.run_id)
     except (psycopg2.Error, PyMongoError, OSError, ValueError):
         log.exception("script failed")
         return EXIT_FAILURE

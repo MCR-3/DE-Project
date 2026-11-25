@@ -67,6 +67,16 @@ CREATE TABLE IF NOT EXISTS staging.stg_fsa_score_descriptor (
 );
 
 -- Seeds (seeds/*.csv, reloaded by `init`)
+CREATE TABLE IF NOT EXISTS staging.stg_ofsted_level (
+    scale        VARCHAR(20) NOT NULL CHECK (scale IN ('OFSTED_4_POINT', 'OFSTED_5_POINT', 'OFSTED_UNGRADED')),
+    level_text   VARCHAR(60) NOT NULL,                   -- value as published (e.g. 2, Strong standard, School remains Good)
+    level_value  SMALLINT,                               -- 1 = best; for OFSTED_UNGRADED the implied grade; NULL if not rated / unclear
+    level_name   VARCHAR(40) NOT NULL,                   -- e.g. Good, Good (implied), Unclear
+    is_rated     BOOLEAN     NOT NULL,
+    PRIMARY KEY (scale, level_text),
+    CHECK (is_rated = (level_value IS NOT NULL))
+);
+
 CREATE TABLE IF NOT EXISTS staging.stg_region_map (
     source       VARCHAR(12) NOT NULL,                   -- fsa / postcodes_io / ofsted
     source_name  VARCHAR(60) NOT NULL,                   -- region name as the source writes it

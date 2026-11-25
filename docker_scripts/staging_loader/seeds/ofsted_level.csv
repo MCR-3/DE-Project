@@ -1,0 +1,21 @@
+scale,level_text,level_value,level_name,is_rated
+OFSTED_4_POINT,1,1,Outstanding,true
+OFSTED_4_POINT,2,2,Good,true
+OFSTED_4_POINT,3,3,Requires improvement,true
+OFSTED_4_POINT,4,4,Inadequate,true
+OFSTED_4_POINT,Not judged,,Not judged,false
+OFSTED_5_POINT,Exceptional,1,Exceptional,true
+OFSTED_5_POINT,Strong standard,2,Strong standard,true
+OFSTED_5_POINT,Expected standard,3,Expected standard,true
+OFSTED_5_POINT,Needs attention,4,Needs attention,true
+OFSTED_5_POINT,Urgent improvement,5,Urgent improvement,true
+OFSTED_5_POINT,Not applicable,,Not applicable,false
+OFSTED_UNGRADED,School remains Outstanding,1,Outstanding (implied),true
+OFSTED_UNGRADED,School remains Outstanding (Concerns) - S5 Next,1,Outstanding (implied),true
+OFSTED_UNGRADED,School remains Good,2,Good (implied),true
+OFSTED_UNGRADED,School remains Good (Improving) - S5 Next,2,Good (implied),true
+OFSTED_UNGRADED,School remains Good (Concerns) - S5 Next,2,Good (implied),true
+OFSTED_UNGRADED,Standards maintained,,Unclear,false
+OFSTED_UNGRADED,Improved significantly,,Unclear,false
+OFSTED_UNGRADED,Some aspects not as strong,,Unclear,false
+OFSTED_UNGRADED,Yes - improving (good),,Unclear,false
