@@ -183,9 +183,11 @@ CREATE TABLE IF NOT EXISTS staging.stg_fsa_inspection (
     scheme_type         VARCHAR(4)   NOT NULL,
     new_rating_pending  BOOLEAN      NOT NULL,
     first_fetch_date    DATE         NOT NULL,           -- first run that saw this rating (date of rows without rating_date)
-    last_fetch_date     DATE         NOT NULL,
+    last_fetch_date     DATE         NOT NULL,           -- fetch date of the last run that saw this rating
     published_date      TIMESTAMP,
     run_id              TEXT         NOT NULL,
+    last_seen_run_id    TEXT         NOT NULL,           -- last run that saw this rating: the business's current
+                                                         -- rating is its row seen last (not the latest rating_date)
     loaded_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
     -- one row per (business, inspection date); NULLS NOT DISTINCT = at most one not-inspected row per business
     CONSTRAINT stg_fsa_inspection_event UNIQUE NULLS NOT DISTINCT (fhrs_id, rating_date)

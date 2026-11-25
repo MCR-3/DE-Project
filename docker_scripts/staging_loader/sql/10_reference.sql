@@ -39,6 +39,13 @@ FROM (
     UNION ALL SELECT 'business_type_invalid', NULL,
         (SELECT count(*) FROM b WHERE staging.to_int(payload->>'BusinessTypeId') IS NULL
                                    OR staging.blank_to_null(payload->>'BusinessTypeName') IS NULL)
+    -- every rating value staging relies on is in the FSA /Ratings list (its rating_key_name)
+    UNION ALL SELECT 'rating_values_missing', NULL,
+        (SELECT count(*) FROM (VALUES ('0'), ('1'), ('2'), ('3'), ('4'), ('5'), ('AwaitingInspection'),
+                                      ('AwaitingPublication'), ('Exempt')) v(value)
+         WHERE NOT EXISTS (SELECT 1 FROM raw.fsa_ratings r
+                           WHERE r.run_id = current_setting('staging.run_id')
+                             AND r.payload->>'ratingKeyName' = v.value))
     -- the seeded district map only points to known authorities of this run
     UNION ALL SELECT 'district_map_unknown_la', NULL,
         (SELECT count(*) FROM staging.stg_district_la_map d

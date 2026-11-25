@@ -197,11 +197,15 @@ WHERE s.fhrs_id = t.fhrs_id AND s.fhrs_copies = 1 AND s.seen_date >= t.last_seen
 -- 3-10 stg_fsa_inspection: one row per (business, inspection date), accumulated over runs.
 -- A rating changed on appeal (same date) is updated in place; a not-inspected business has one row
 -- with rating_date NULL (NULLS NOT DISTINCT), kept as history once it is inspected.
+-- That not-inspected row is dated by fetch date, which can be later than the real rating_date of the
+-- inspection that follows: the current rating is the row with the latest last_seen_run_id /
+-- last_fetch_date, never the latest rating_date.
 INSERT INTO staging.stg_fsa_inspection AS t
     (fhrs_id, rating_date, rating_value, rating_key, scheme_type, new_rating_pending,
-     first_fetch_date, last_fetch_date, published_date, run_id, loaded_at)
+     first_fetch_date, last_fetch_date, published_date, run_id, last_seen_run_id, loaded_at)
 SELECT s.fhrs_id, s.rating_date, s.rating_value, s.rating_key, s.scheme_type, s.new_rating_pending,
-       s.seen_date, s.seen_date, s.published_date, current_setting('staging.run_id'), now()
+       s.seen_date, s.seen_date, s.published_date, current_setting('staging.run_id'),
+       current_setting('staging.run_id'), now()
 FROM est_src s
 WHERE NOT EXISTS (SELECT 1 FROM est_problem p WHERE p.source_key = s.source_key)
 ON CONFLICT ON CONSTRAINT stg_fsa_inspection_event DO UPDATE SET
@@ -209,7 +213,7 @@ ON CONFLICT ON CONSTRAINT stg_fsa_inspection_event DO UPDATE SET
     scheme_type = EXCLUDED.scheme_type, new_rating_pending = EXCLUDED.new_rating_pending,
     first_fetch_date = LEAST(t.first_fetch_date, EXCLUDED.first_fetch_date),
     last_fetch_date = EXCLUDED.last_fetch_date, published_date = EXCLUDED.published_date,
-    run_id = EXCLUDED.run_id, loaded_at = EXCLUDED.loaded_at
+    run_id = EXCLUDED.run_id, last_seen_run_id = EXCLUDED.last_seen_run_id, loaded_at = EXCLUDED.loaded_at
 WHERE EXCLUDED.last_fetch_date >= t.last_fetch_date;
 
 -- an older run staged after a newer one can still move first_fetch_date back
