@@ -1,17 +1,20 @@
 -- Step 1: reference tables from one FSA run (TODO 1-1 .. 1-8).
--- Run by `stage --step reference` in one transaction, with the run in current_setting('staging.run_id').
--- The DQ checks come first; if one fails, the last block raises and the whole step is rolled back.
+-- Run by `stage --step reference`, with the run in current_setting('staging.run_id').
+-- Two transactions, split at the `-- @@ load` line: the checks are committed first (kept even when they
+-- fail); the load runs only if no `run` check failed. All checks here are run-level.
 
 -- 1-8 DQ checks -----------------------------------------------------------------------------------
 DELETE FROM staging.stg_dq_result WHERE run_id = current_setting('staging.run_id') AND stage = 'reference';
 
-INSERT INTO staging.stg_dq_result (run_id, stage, check_name, failed_count)
+INSERT INTO staging.stg_dq_result (run_id, stage, check_name, severity, failed_count, sample)
 WITH a AS (
     SELECT payload FROM raw.fsa_authorities WHERE run_id = current_setting('staging.run_id')
 ), b AS (
     SELECT payload FROM raw.fsa_business_types WHERE run_id = current_setting('staging.run_id')
 )
-SELECT current_setting('staging.run_id'), 'reference', check_name, failed_count FROM (
+SELECT current_setting('staging.run_id'), 'reference', check_name, 'run', failed_count,
+       (SELECT bool_or(sample) FROM raw.fsa_authorities WHERE run_id = current_setting('staging.run_id'))
+FROM (
     -- the run has authorities / business types / ratings / score descriptors at all
     SELECT 'authorities_present' AS check_name, (SELECT count(*) FROM a) = 0 AS f0, NULL::bigint AS n
     UNION ALL SELECT 'business_types_present', (SELECT count(*) FROM b) = 0, NULL
@@ -43,16 +46,8 @@ SELECT current_setting('staging.run_id'), 'reference', check_name, failed_count 
 ) c(check_name, f0, n)
 CROSS JOIN LATERAL (SELECT coalesce(n, CASE WHEN f0 THEN 1 ELSE 0 END)::int AS failed_count) x;
 
-DO $$
-DECLARE failed TEXT;
-BEGIN
-    SELECT string_agg(check_name || '=' || failed_count, ', ') INTO failed
-    FROM staging.stg_dq_result
-    WHERE run_id = current_setting('staging.run_id') AND stage = 'reference' AND failed_count > 0;
-    IF failed IS NOT NULL THEN
-        RAISE EXCEPTION 'reference DQ failed for run %: %', current_setting('staging.run_id'), failed;
-    END IF;
-END $$;
+-- @@ load ---------------------------------------------------------------------------------------
+-- (runs only if no check above failed)
 
 -- 1-1 .. 1-5 stg_local_authority ------------------------------------------------------------------
 INSERT INTO staging.stg_local_authority

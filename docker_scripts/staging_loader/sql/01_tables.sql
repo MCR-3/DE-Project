@@ -215,10 +215,33 @@ CREATE TABLE IF NOT EXISTS staging.stg_load_log (
 );
 
 CREATE TABLE IF NOT EXISTS staging.stg_dq_result (
-    run_id        TEXT        NOT NULL,
-    stage         VARCHAR(30) NOT NULL,
-    check_name    VARCHAR(80) NOT NULL,
-    failed_count  INTEGER     NOT NULL,
-    checked_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (run_id, stage, check_name)              -- a rerun overwrites its own results
+    run_id          TEXT        NOT NULL,
+    stage           VARCHAR(30) NOT NULL,
+    check_name      VARCHAR(80) NOT NULL,
+    severity        VARCHAR(10) NOT NULL DEFAULT 'run' CHECK (severity IN ('run', 'row', 'info')),
+                                                          -- run: failed_count > 0 fails the step (nothing loaded)
+                                                          -- row: rows sent to stg_quarantine for this reason
+                                                          -- info: a number kept for the report
+    failed_count    INTEGER     NOT NULL,
+    observed_value  BIGINT,                               -- e.g. source row count (compared with the previous full run)
+    sample          BOOLEAN,                              -- the run is a sample run
+    checked_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (run_id, stage, check_name)               -- a rerun overwrites its own results
+);
+-- tables created before these columns existed
+ALTER TABLE staging.stg_dq_result ADD COLUMN IF NOT EXISTS severity VARCHAR(10) NOT NULL DEFAULT 'run'
+    CHECK (severity IN ('run', 'row', 'info'));
+ALTER TABLE staging.stg_dq_result ADD COLUMN IF NOT EXISTS observed_value BIGINT;
+ALTER TABLE staging.stg_dq_result ADD COLUMN IF NOT EXISTS sample BOOLEAN;
+
+-- Rows left out by a step's row-level checks, with the source record as received.
+-- Written in the same transaction as the step's load; a rerun of the step replaces its own rows.
+CREATE TABLE IF NOT EXISTS staging.stg_quarantine (
+    run_id          TEXT        NOT NULL,
+    stage           VARCHAR(30) NOT NULL,
+    source_key      TEXT        NOT NULL,
+    reasons         TEXT[]      NOT NULL,                 -- e.g. {urn_invalid,open_date_invalid}
+    payload         JSONB       NOT NULL,
+    quarantined_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (run_id, stage, source_key)
 );
