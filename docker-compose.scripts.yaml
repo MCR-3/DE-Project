@@ -27,6 +27,12 @@ services:
     build: ./docker_scripts/mongo_loader
     image: mongo-loader:latest
 
+  warehouse-setup:
+    build: ./docker_scripts/warehouse_setup
+    image: warehouse-setup:latest
+    volumes:
+      - ./data:/data
+
   # Add each new script the same way:
   # another-script:
   #   build: ./docker_scripts/another_script
