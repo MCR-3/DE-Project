@@ -21,7 +21,8 @@ Sub-commands:
 
   * Configuration from the environment: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD (Airflow
     connection `project-db`), MONGO_HOST, MONGO_PORT, MONGO_DB, MONGO_USER, MONGO_PASSWORD (connection
-    `project-mongo`), optional MONGO_AUTH_SOURCE (default `admin`).
+    `project-mongo`), optional MONGO_AUTH_SOURCE (default `admin`), optional STAGING_SAMPLE_PERCENT
+    (default `5`).
   * Exit code: 0 ok, 1 failure, 2 bad config (non-zero makes the Airflow task fail).
 """
 
@@ -30,6 +31,7 @@ import logging
 import os
 import re
 import sys
+import zlib
 from pathlib import Path
 
 import psycopg2
@@ -44,6 +46,9 @@ EXIT_FAILURE = 1
 EXIT_BAD_CONFIG = 2
 
 BATCH_SIZE = 1000
+SAMPLE_PERCENT = float(os.environ.get("STAGING_SAMPLE_PERCENT", "5"))
+SAMPLE_COLLECTIONS = {"raw_fsa_establishments", "raw_ofsted_schools"}
+
 HERE = Path(__file__).resolve().parent
 SQL_DIR = HERE / "sql"
 SEED_DIR = HERE / "seeds"
@@ -131,6 +136,16 @@ def raw_table(collection):
     return "raw." + collection.removeprefix("raw_")
 
 
+def keep_document(collection, source_key, sample_percent=SAMPLE_PERCENT):
+    """Deterministically keep sample_percent% of large fact collections by source_key."""
+    if collection not in SAMPLE_COLLECTIONS or sample_percent >= 100:
+        return True
+    if sample_percent <= 0:
+        return False
+    bucket = zlib.crc32(str(source_key).encode("utf-8")) % 10_000
+    return bucket < int(sample_percent * 100)
+
+
 # --------------------------------------------------------------------------------------------- init
 
 def run_init(pg, db):
@@ -158,7 +173,7 @@ def pending_runs(pg, db, source):
 
 
 def copy_collection(pg, db, collection, run_id):
-    """Copy one run of one collection; returns (documents in MongoDB, rows in raw after the copy)."""
+    """Copy one run of one collection; returns (selected documents, rows in raw after the copy)."""
     table = raw_table(collection)
     sql = f"INSERT INTO {table} ({', '.join(ENVELOPE)}) VALUES %s ON CONFLICT (run_id, source_key) DO NOTHING"
     cursor = db[collection].find({"run_id": run_id}, {"_id": 0}, batch_size=BATCH_SIZE)
@@ -169,6 +184,8 @@ def copy_collection(pg, db, collection, run_id):
             if missing:
                 raise ValueError(f"{collection} run {run_id}: a document has no {missing} "
                                  f"(landed before the sample / fetch_date fields?)")
+            if not keep_document(collection, doc["source_key"]):
+                continue
             batch.append(tuple(Json(doc[f]) if f == "payload" else doc[f] for f in ENVELOPE))
             if len(batch) >= BATCH_SIZE:
                 execute_values(cur, sql, batch, page_size=BATCH_SIZE)
@@ -186,12 +203,12 @@ def run_copy_raw(pg, db, source, run_id=None):
     if not runs:
         log.info("%s: no pending full run to copy", source)
         return
-    log.info("%s: %d run(s) to copy: %s", source, len(runs), ", ".join(runs))
+    log.info("%s: %d run(s) to copy (sample=%.2f%%): %s", source, len(runs), SAMPLE_PERCENT, ", ".join(runs))
     for run in runs:
         for collection in SOURCES[source]:
             documents, copied = copy_collection(pg, db, collection, run)
             if documents != copied:
-                raise ValueError(f"{collection} run {run}: {documents} documents in MongoDB "
+                raise ValueError(f"{collection} run {run}: {documents} documents selected from MongoDB "
                                  f"but {copied} rows in {raw_table(collection)}")
             if documents == 0:
                 log.warning("%s run %s: no document", collection, run)
