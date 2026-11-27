@@ -1,6 +1,6 @@
 # DE-Project
 
-Apache Airflow 3.3.1 (CeleryExecutor) stack run with Docker Compose. The `example_*` DAGs and `example_script` are **examples and templates**. The two landing DAGs (`fsa_landing`, `ofsted_landing`) are the first real part of the project: they scrape the UK food hygiene (FSA) and school inspection (Ofsted) data and store it raw in MongoDB. Only that landing phase exists so far: staging (PostgreSQL), the warehouse and the reporting layer are not implemented, and nothing here should reach into them. See `README.md` for the full setup guide.
+Apache Airflow 3.3.1 (CeleryExecutor) stack run with Docker Compose. The `example_*` DAGs and `example_script` are **examples and templates**. The two landing DAGs (`fsa_landing`, `ofsted_landing`) are the first real part of the project: they scrape the UK food hygiene (FSA) and school inspection (Ofsted) data and store it raw in MongoDB. **Staging** (MongoDB -> typed, checked tables in `project-db`, schemas `raw` and `staging`) is implemented by `docker_scripts/staging_loader` and `docker_scripts/postcode_scraper`, orchestrated by the `staging_load` DAG. The warehouse has only its empty DuckDB schema (`docker_scripts/warehouse_setup`); warehouse loading and reporting are not implemented. See `README.md` for the full setup guide and `docs/staging/` for staging.
 
 ## Git rules (mandatory)
 
@@ -20,7 +20,8 @@ These override any default attribution behaviour of the agent or its tooling.
 │   ├── example_docker.py        DAG `example_docker_script`: runs docker_scripts/example_script via DockerOperator
 │   ├── fsa_landing.py           DAG `fsa_landing` (weekly, Mondays 02:00 UTC): `prepare_fsa`, `fetch_fsa` (mapped, one per Fetcher), `finalize_fsa` (all docker_scripts/fsa_scraper, trigger rule `all_done` on finalize) then `load_into_mongo` (docker_scripts/mongo_loader), all via DockerOperator; params `sample`, `la_ids`, `fetchers`, `max_rps`
 │   ├── ofsted_landing.py        DAG `ofsted_landing` (monthly, 14th): `scrape_ofsted` (docker_scripts/ofsted_scraper) then `load_into_mongo`; param `url`
-│   └── dag_names.py             The single place where DAG ids / display names are defined (the landing DAGs import from it)
+│   ├── staging_load.py          DAG `staging_load` (Mondays 08:00 + 14th 09:00 UTC, after the landing DAGs): staging_loader steps, postcode_scraper + mongo_loader for the postcode run, all via DockerOperator; params `fsa_run`, `ofsted_run` (empty = every pending full run)
+│   └── dag_names.py             The single place where DAG ids / display names are defined (the landing and staging DAGs import from it)
 ├── docker_scripts/
 │   ├── example_script/          Template for a script that runs OUTSIDE Airflow's container (own image)
 │   │   ├── main.py              argparse + DB_* env vars + logging + exit codes, no real logic
@@ -30,6 +31,11 @@ These override any default attribution behaviour of the agent or its tooling.
 │   │   └── main.py, authority_queue.py (all the Redis logic: queue, leases, rate limit), requirements.txt (requests, redis), Dockerfile
 │   ├── ofsted_scraper/          Finds the newest "latest inspections" CSV on the gov.uk page and saves it untouched in data/landing/ofsted/<run>/schools.csv + manifest.json; no DB
 │   │   └── main.py, requirements.txt (requests, beautifulsoup4), Dockerfile
+│   ├── postcode_scraper/        Landing for postcodes.io: reads the postcodes of a landed Ofsted run and FSA run from Mongo, saves the bulk / terminated / reverse-geocoding responses as received in data/landing/postcodes/<run>/ + manifest.json (collections raw_postcodes, raw_terminated_postcodes, raw_reverse_postcodes), cached 90 days
+│   │   └── main.py, requirements.txt (requests, pymongo), Dockerfile
+│   ├── staging_loader/          Staging: sub-commands `init`, `copy-raw` (Mongo -> raw.* JSONB), `stage --step <step>` (runs one sql/ file); all cleaning, checks and unpivoting are SQL
+│   │   └── main.py, sql/ (00-03 DDL/functions/views, 10-62 one file per step), seeds/ (region_map, district_la_map, ofsted_level, measure), requirements.txt (pymongo, psycopg2-binary), Dockerfile
+│   ├── warehouse_setup/         Creates the empty DuckDB star schema in data/warehouse/warehouse.duckdb
 │   └── mongo_loader/            Generic: reads a run folder's manifest.json and appends one envelope document per record to the collections it names (`project` db: raw_fsa_authorities, raw_fsa_business_types, raw_fsa_ratings, raw_fsa_score_descriptors, raw_fsa_establishments, raw_ofsted_schools)
 │       └── main.py, requirements.txt (pymongo), Dockerfile
 ├── Dockerfile, requirements.txt Custom Airflow image (see Dependencies)
@@ -39,6 +45,9 @@ These override any default attribution behaviour of the agent or its tooling.
 ├── data/                        Mounted at /opt/airflow/data: files produced by DAGs (content git-ignored, folder kept by .gitkeep)
 ├── config/, logs/               Mounted into Airflow; generated at runtime and git-ignored
 ├── plugins/                     Mounted into Airflow; empty
+├── docs/staging/                Staging docs (English, shared): README (build/run/rules), warehouse-contract, data-dictionary-changes, dq-results
+├── docs/adr/                    Decisions (0001-0002 landing, 0003-0005 staging)
+├── document/                    Git-ignored personal notes of a team member; not project documentation
 └── docs/agents/                 Config for the engineering skills (see Agent skills below)
 ```
 
@@ -50,7 +59,7 @@ These override any default attribution behaviour of the agent or its tooling.
 | `airflow-scheduler`, `airflow-dag-processor`, `airflow-worker`, `airflow-triggerer` | custom | Share `x-airflow-common`; the worker is a Celery worker |
 | `airflow-init` | custom | One-shot: migrates the metadata DB, creates the admin user |
 | `postgres` | `postgres:16` | Airflow's own metadata DB (`airflow`/`airflow`/`airflow`), internal, never used for project data |
-| `project-db` | `postgres:18` | The DB for relational project data, unrelated to Airflow (user/db `project`, password `devpassword`); `localhost:5433` from the host, `project-db:5432` from containers |
+| `project-db` | `postgres:18` | The DB for relational project data, unrelated to Airflow (user/db `project`, password `devpassword`): the staging schemas `raw` and `staging`; `localhost:5433` from the host, `project-db:5432` from containers |
 | `project-redis` | `redis:7.2-bookworm` | The FSA Authority queue (`docs/adr/0002`), unrelated to Airflow's `redis`; AOF persistence, password `devpassword`; `localhost:6380` from the host, `project-redis:6379` from containers |
 | `project-mongo` | `mongo:8` | The DB for document project data (the landing zone of the landing DAGs); root user `project` / `devpassword` (authSource `admin`), db `project`; `localhost:27018` from the host, `project-mongo:27017` from containers |
 | `redis` | `redis:7.2-bookworm` | Celery broker |
@@ -76,12 +85,22 @@ Documents in MongoDB: `{source, dataset, run_id, sample, ingested_at, fetch_date
 
 The task succeeds or fails on the container's exit code (the script uses 0 ok / 1 failure / 2 bad config).
 
+### The staging layer
+
+Full description in `docs/staging/README.md` (and what the warehouse may rely on in `docs/staging/warehouse-contract.md`; decisions in `docs/adr/0003`-`0005`). The rules to keep when changing it:
+
+- Python (`staging_loader/main.py`) only moves data (Mongo -> `raw.*`, streamed in batches); typing, cleaning, matching, checks and unpivoting are SQL files in `staging_loader/sql/`, one per step, each split at a `-- @@ load` line into two transactions: the checks (written to `staging.stg_dq_result` and committed even when they fail), then, only if no `run`-severity check failed, the load. Rows with a row-level problem go to `staging.stg_quarantine` (Postgres, not Mongo) in the load transaction; a run-level failure loads nothing and exits 1.
+- Order per run: `reference` -> `establishments` -> `fsa_measures` -> `finalize_fsa` (FSA run); `schools` -> `ofsted_inspections` -> `finalize_ofsted` (Ofsted run); `geo` -> `finalize_postcodes` (postcode run, from `postcode_scraper`; `geo` must follow `schools` and `establishments`). `finalize_*` reconciles every source record, writes `staging.stg_load_log` and only then deletes the run's `raw.*` rows.
+- Only full runs (`sample: false`) are staged by default; a sample run needs an explicit `--run-id`. Every step is idempotent, and a run staged again after a newer one never overwrites newer values.
+- History is kept: inspection events accumulate, schools and businesses are never deleted (`last_seen_run_id` / `last_seen_date` show when they last appeared), the current FSA rating is the row seen last, not the latest date.
+- Reference data is in `staging_loader/seeds/*.csv` (reloaded by `init`); `district_la_map.csv` (ONS district -> FSA `la_code`) is reviewed by hand, and a district missing from it fails the `geo` step. `la_code` is a `VARCHAR` everywhere.
+
 ## Dependencies
 
 - **Host:** Docker (Compose v2) only, with at least 4 GB RAM and 2 CPUs for Docker. No local Python setup is needed; editor warnings such as "sqlalchemy could not be resolved" are expected, since the packages only exist inside the images.
 - **Airflow image:** `apache/airflow:3.3.1` plus `requirements.txt` (`pandas`, `psycopg2-binary`, `sqlalchemy`, `apache-airflow-providers-docker`, `xlsx2csv`, whose CLI is called from a `BashOperator`). The `Dockerfile` installs them with `apache-airflow==${AIRFLOW_VERSION}` to keep Airflow's own version pinned. Rebuild with `docker compose up -d --build` after editing either file.
-- **Script images:** each `docker_scripts/<name>/requirements.txt` is separate and must never be merged into the root one. `example_script` uses `numpy`, `pandas`, `psycopg2-binary`, `sqlalchemy` on `python:3.12-slim`.
-- **Configuration (`.env`, copied from `.env.example`):** `AIRFLOW_UID`, `FERNET_KEY` (required), `DOCKER_NETWORK` (needed for scripts to reach `project-db`; usually `<folder-name>_default`, see `docker network ls`), `HOST_DATA_DIR` (required by the landing DAGs, see above), optional `SCRAPER_USER_AGENT`, optional `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD`.
+- **Script images:** each `docker_scripts/<name>/requirements.txt` is separate and must never be merged into the root one. `example_script` uses `numpy`, `pandas`, `psycopg2-binary`, `sqlalchemy` on `python:3.12-slim`; `staging_loader` uses `pymongo`, `psycopg2-binary`; `postcode_scraper` uses `requests`, `pymongo`.
+- **Configuration (`.env`, copied from `.env.example`):** `AIRFLOW_UID`, `FERNET_KEY` (required), `DOCKER_GID` (group of `/var/run/docker.sock`, `stat -c %g`; needed on a Linux Docker Engine host or every DockerOperator task gets Permission denied, `0` on Docker Desktop), `DOCKER_NETWORK` (needed for scripts to reach `project-db`; usually `<folder-name>_default`, see `docker network ls`), `HOST_DATA_DIR` (required by the landing DAGs, see above), optional `SCRAPER_USER_AGENT`, optional `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD`.
 - **Airflow connection (created by hand in the UI, not in code):** `project-db` (host `project-db`, schema/login `project`, password `devpassword`, port 5432), used by every DAG that touches relational data, `project-mongo` (type Generic, host `project-mongo`, schema/login `project`, password `devpassword`, port 27017), which both landing DAGs read with `Connection.get` at parse time, so they do not load until it exists, and `project-redis` (type Generic, host `project-redis`, password `devpassword`, port 6379), read the same way by `fsa_landing`. There is deliberately no connection to Airflow's metadata DB. Exact values are in the README, step 4.
 
 ## How to run
@@ -95,7 +114,7 @@ docker compose ps                                             # health check
 docker compose down                                           # stop (-v also deletes the DB volumes, so run airflow-init again)
 ```
 
-Then open http://localhost:8080, un-pause the DAG (DAGs are created paused), and trigger it. `example_docker_script` takes an `n_rows` parameter, `fsa_landing` a `sample` checkbox (unticked by default: a full run of every English authority; ticked: a sample run of the authorities in `la_ids`, comma-separated FSA `LocalAuthorityId` values, default `321,326,397`), `fetchers` (1-8, default 4) and `max_rps` (default 4), `ofsted_landing` an optional `url` (a specific CSV instead of the newest release).
+Then open http://localhost:8080, un-pause the DAG (DAGs are created paused), and trigger it. `example_docker_script` takes an `n_rows` parameter, `fsa_landing` a `sample` checkbox (unticked by default: a full run of every English authority; ticked: a sample run of the authorities in `la_ids`, comma-separated FSA `LocalAuthorityId` values, default `321,326,397`), `fetchers` (1-8, default 4) and `max_rps` (default 4), `ofsted_landing` an optional `url` (a specific CSV instead of the newest release), `staging_load` optional `fsa_run` / `ofsted_run` (one run to stage, e.g. a sample run; empty stages every full run not finalized yet). Build the `staging-loader` and `postcode-scraper` images before `staging_load`.
 
 After changing a script, rebuild its image; the DAG uses the local image tag, so it will not pick up changes otherwise. DAG files under `dags/` are mounted, so edits are picked up without a rebuild.
 
@@ -120,6 +139,7 @@ There is no automated test suite and no CI. Verify changes by running them:
 - **The FSA scraper on its own** (needs network access and `project-redis`, no Airflow): `docker compose up -d project-redis`, then run the three steps with `docker run --rm --user "$(id -u)" --network de-project_default -v "$PWD/data:/data" -e REDIS_HOST=project-redis -e REDIS_PASSWORD=devpassword fsa-scraper:latest <step> --run-id test` (`--user`: the owner of `data/`, or the scraper cannot write there; `--network`: the Compose network). `prepare --run-id test --la-ids 321` makes a sample run (the default by hand; `--no-sample` is a full run) and writes the reference files and `plan.json`; `fetch --run-id test --fetcher 1` (start several at once to see them share the queue; `docker kill` one mid-authority and another resumes it about 2 minutes later) writes `establishments/la_321/page_0001.json` and `done.json`; `finalize --run-id test` writes `manifest.json` with `"sample": true`, or exits 1 listing the unfinished authorities. `prepare` with `--la-ids 197` (Aberdeen City, Scotland), `--la-ids all` or `--page-size 500` logs an error and exits 2. Rerunning `prepare` with the same `--run-id` queues only the authorities without `done.json` (delete the folder for a fresh run). Watch the queue with `docker compose exec project-redis redis-cli -a devpassword lrange fsa:test:queue 0 -1`.
 - **The Ofsted scraper on its own** (needs network access, no Airflow): `docker run --rm --user "$(id -u)" -v "$PWD/data:/data" ofsted-scraper:latest --run-id test` writes `data/landing/ofsted/test/schools.csv` (about 22,000 rows) and `manifest.json`; add `--url <csv url>` for a specific month.
 - **The Mongo loader against `project-mongo`:** `docker compose up -d project-mongo`, then run the `mongo-loader` service with both compose files merged, `-v "$PWD/data:/data:ro"`, the `MONGO_HOST/PORT/DB/USER/PASSWORD` variables and `--run-dir /data/landing/fsa/test` (add `--no-deps` so it does not start the Airflow stack); check with `docker compose exec project-mongo mongosh -u project -p devpassword --authenticationDatabase admin project --eval "db.raw_fsa_establishments.countDocuments()"`. Loading the same run twice must not change the count (the second log line says everything is already loaded); a folder without `manifest.json`, or a manifest without `sample`, exits 2. Remove test data afterwards (`db.<collection>.deleteMany({run_id: "test"})`).
+- **Staging** (needs `project-db`, `project-mongo` and landed runs; `postcode_scraper` also needs network access): follow the command sequence in `docs/staging/README.md` with `--run-id` set to the test runs, then check `SELECT * FROM staging.v_dq_report` and the row counts. Running any step twice must not change the counts; a step whose earlier step did not pass exits 1. To test a failure path, insert a modified copy of a run into `raw.*` under another run id, stage it, then delete it (and its `stg_dq_result` / `stg_quarantine` rows).
 - **A DAG:** with the stack up, look for parse errors in the UI or in `docker compose logs airflow-dag-processor`, then trigger the DAG and read the task logs in the UI. The `project-db` connection must exist before `example_docker.py` parses, because it calls `Connection.get("project-db")` at the top level. A quick parse check without the stack: `docker compose run --rm --no-deps --entrypoint python airflow-scheduler dags/example_dag.py` (no output besides deprecation warnings means it imports).
 
 ## Conventions

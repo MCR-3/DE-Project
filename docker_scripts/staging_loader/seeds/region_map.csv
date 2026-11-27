@@ -1,0 +1,28 @@
+source,source_name,region_name
+fsa,East Counties,East of England
+fsa,East Midlands,East Midlands
+fsa,London,London
+fsa,North East,North East
+fsa,North West,North West
+fsa,South East,South East
+fsa,South West,South West
+fsa,West Midlands,West Midlands
+fsa,Yorkshire and Humberside,Yorkshire and the Humber
+postcodes_io,East of England,East of England
+postcodes_io,East Midlands,East Midlands
+postcodes_io,London,London
+postcodes_io,North East,North East
+postcodes_io,North West,North West
+postcodes_io,South East,South East
+postcodes_io,South West,South West
+postcodes_io,West Midlands,West Midlands
+postcodes_io,Yorkshire and The Humber,Yorkshire and the Humber
+ofsted,East of England,East of England
+ofsted,East Midlands,East Midlands
+ofsted,London,London
+ofsted,North East,North East
+ofsted,North West,North West
+ofsted,South East,South East
+ofsted,South West,South West
+ofsted,West Midlands,West Midlands
+ofsted,Yorkshire and the Humber,Yorkshire and the Humber

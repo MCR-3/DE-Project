@@ -76,6 +76,7 @@ x-airflow-common:
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    DOCKER_NETWORK: ${DOCKER_NETWORK:-de-project_default}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
@@ -84,6 +85,11 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/airflow/data
     - /var/run/docker.sock:/var/run/docker.sock
   user: "${AIRFLOW_UID:-50000}:0"
+  # docker.sock is owned by the `docker` group on a Linux Docker Engine host: without that group the
+  # worker cannot start DockerOperator containers (Permission denied). Docker Desktop's socket is
+  # group 0, which the user above already has, so the default 0 changes nothing there.
+  group_add:
+    - "${DOCKER_GID:-0}"
   depends_on:
     &airflow-common-depends-on
     redis:

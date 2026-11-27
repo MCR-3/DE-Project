@@ -1,0 +1,297 @@
+gss_code,district_name,la_code,match_method
+E06000001,Hartlepool,859,exact
+E06000002,Middlesbrough,861,exact
+E06000003,Redcar and Cleveland,860,exact
+E06000004,Stockton-on-Tees,862,normalised
+E06000005,Darlington,874,exact
+E06000006,Halton,889,exact
+E06000007,Warrington,890,exact
+E06000008,Blackburn with Darwen,897,manual
+E06000009,Blackpool,898,exact
+E06000010,"Kingston upon Hull, City of",866,manual
+E06000011,East Riding of Yorkshire,863,exact
+E06000012,North East Lincolnshire,865,exact
+E06000013,North Lincolnshire,864,exact
+E06000014,York,868,exact
+E06000015,Derby,871,normalised
+E06000016,Leicester,878,normalised
+E06000017,Rutland,879,exact
+E06000018,Nottingham,899,normalised
+E06000019,"Herefordshire, County of",895,manual
+E06000020,Telford and Wrekin,900,normalised
+E06000021,Stoke-on-Trent,880,normalised
+E06000022,Bath and North East Somerset,857,exact
+E06000023,"Bristol, City of",855,normalised
+E06000024,North Somerset,858,exact
+E06000025,South Gloucestershire,856,exact
+E06000026,Plymouth,891,normalised
+E06000027,Torbay,892,exact
+E06000030,Swindon,881,exact
+E06000031,Peterborough,888,normalised
+E06000032,Luton,869,exact
+E06000033,Southend-on-Sea,893,normalised
+E06000034,Thurrock,894,exact
+E06000035,Medway,896,exact
+E06000036,Bracknell Forest,882,exact
+E06000037,West Berkshire,883,exact
+E06000038,Reading,884,exact
+E06000039,Slough,885,exact
+E06000040,Windsor and Maidenhead,886,exact
+E06000041,Wokingham,887,exact
+E06000042,Milton Keynes,870,exact
+E06000043,Brighton and Hove,875,exact
+E06000044,Portsmouth,876,exact
+E06000045,Southampton,877,exact
+E06000046,Isle of Wight,867,exact
+E06000047,County Durham,706,manual
+E06000049,Cheshire East,703,exact
+E06000050,Cheshire West and Chester,704,exact
+E06000051,Shropshire,708,exact
+E06000052,Cornwall,705,exact
+E06000053,Isles of Scilly,336,exact
+E06000054,Wiltshire,709,exact
+E06000055,Bedford,701,exact
+E06000056,Central Bedfordshire,702,exact
+E06000057,Northumberland,707,exact
+E06000058,"Bournemouth, Christchurch and Poole",872,exact
+E06000059,Dorset,085,exact
+E06000060,Buckinghamshire,021,exact
+E06000061,North Northamptonshire,235,exact
+E06000062,West Northamptonshire,236,exact
+E06000063,Cumberland,055,exact
+E06000064,Westmorland and Furness,056,exact
+E06000065,North Yorkshire,250,exact
+E06000066,Somerset,281,exact
+E07000008,Cambridge,027,normalised
+E07000009,East Cambridgeshire,028,exact
+E07000010,Fenland,029,exact
+E07000011,Huntingdonshire,030,exact
+E07000012,South Cambridgeshire,032,exact
+E07000032,Amber Valley,062,exact
+E07000033,Bolsover,063,exact
+E07000034,Chesterfield,064,exact
+E07000035,Derbyshire Dales,070,exact
+E07000036,Erewash,066,exact
+E07000037,High Peak,067,exact
+E07000038,North East Derbyshire,068,exact
+E07000039,South Derbyshire,069,exact
+E07000040,East Devon,072,exact
+E07000041,Exeter,073,normalised
+E07000042,Mid Devon,074,exact
+E07000043,North Devon,075,exact
+E07000044,South Hams,077,exact
+E07000045,Teignbridge,078,exact
+E07000046,Torridge,080,exact
+E07000047,West Devon,081,exact
+E07000061,Eastbourne,102,exact
+E07000062,Hastings,103,exact
+E07000063,Lewes,105,exact
+E07000064,Rother,106,exact
+E07000065,Wealden,107,exact
+E07000066,Basildon,109,exact
+E07000067,Braintree,110,exact
+E07000068,Brentwood,111,exact
+E07000069,Castle Point,112,exact
+E07000070,Chelmsford,113,exact
+E07000071,Colchester,114,exact
+E07000072,Epping Forest,115,exact
+E07000073,Harlow,116,exact
+E07000074,Maldon,117,exact
+E07000075,Rochford,118,exact
+E07000076,Tendring,120,exact
+E07000077,Uttlesford,122,exact
+E07000078,Cheltenham,124,exact
+E07000079,Cotswold,125,exact
+E07000080,Forest of Dean,126,exact
+E07000081,Gloucester,127,normalised
+E07000082,Stroud,128,exact
+E07000083,Tewkesbury,129,exact
+E07000084,Basingstoke and Deane,131,exact
+E07000085,East Hampshire,132,exact
+E07000086,Eastleigh,133,exact
+E07000087,Fareham,134,exact
+E07000088,Gosport,135,exact
+E07000089,Hart,136,exact
+E07000090,Havant,137,exact
+E07000091,New Forest,138,exact
+E07000092,Rushmoor,140,exact
+E07000093,Test Valley,142,exact
+E07000094,Winchester,143,normalised
+E07000095,Broxbourne,155,exact
+E07000096,Dacorum,156,exact
+E07000098,Hertsmere,158,exact
+E07000099,North Hertfordshire,159,exact
+E07000102,Three Rivers,162,exact
+E07000103,Watford,163,exact
+E07000105,Ashford,179,exact
+E07000106,Canterbury,180,normalised
+E07000107,Dartford,181,exact
+E07000108,Dover,182,exact
+E07000109,Gravesham,184,exact
+E07000110,Maidstone,185,exact
+E07000111,Sevenoaks,187,exact
+E07000112,Folkestone and Hythe,188,exact
+E07000113,Swale,189,exact
+E07000114,Thanet,190,exact
+E07000115,Tonbridge and Malling,191,exact
+E07000116,Tunbridge Wells,192,exact
+E07000117,Burnley,196,exact
+E07000118,Chorley,197,exact
+E07000119,Fylde,198,exact
+E07000120,Hyndburn,199,exact
+E07000121,Lancaster,200,normalised
+E07000122,Pendle,201,exact
+E07000123,Preston,202,exact
+E07000124,Ribble Valley,203,exact
+E07000125,Rossendale,204,exact
+E07000126,South Ribble,205,exact
+E07000127,West Lancashire,206,exact
+E07000128,Wyre,207,exact
+E07000129,Blaby,209,exact
+E07000130,Charnwood,210,exact
+E07000131,Harborough,211,exact
+E07000132,Hinckley and Bosworth,212,exact
+E07000133,Melton,214,exact
+E07000134,North West Leicestershire,215,exact
+E07000135,Oadby and Wigston,216,exact
+E07000136,Boston,219,exact
+E07000137,East Lindsey,220,exact
+E07000138,Lincoln,221,normalised
+E07000139,North Kesteven,222,exact
+E07000140,South Holland,223,exact
+E07000141,South Kesteven,224,exact
+E07000142,West Lindsey,225,exact
+E07000143,Breckland,227,exact
+E07000144,Broadland,228,exact
+E07000145,Great Yarmouth,229,exact
+E07000146,King's Lynn and West Norfolk,230,exact
+E07000147,North Norfolk,231,exact
+E07000148,Norwich,232,normalised
+E07000149,South Norfolk,233,exact
+E07000170,Ashfield,259,exact
+E07000171,Bassetlaw,260,exact
+E07000172,Broxtowe,261,exact
+E07000173,Gedling,262,exact
+E07000174,Mansfield,263,exact
+E07000175,Newark and Sherwood,264,exact
+E07000176,Rushcliffe,266,exact
+E07000177,Cherwell,268,exact
+E07000178,Oxford,269,normalised
+E07000179,South Oxfordshire,270,exact
+E07000180,Vale of White Horse,271,exact
+E07000181,West Oxfordshire,272,exact
+E07000192,Cannock Chase,287,exact
+E07000193,East Staffordshire,288,exact
+E07000194,Lichfield,289,exact
+E07000195,Newcastle-under-Lyme,290,normalised
+E07000196,South Staffordshire,291,exact
+E07000197,Stafford,292,exact
+E07000198,Staffordshire Moorlands,293,exact
+E07000199,Tamworth,295,exact
+E07000200,Babergh,297,exact
+E07000202,Ipswich,299,exact
+E07000203,Mid Suffolk,300,exact
+E07000207,Elmbridge,305,exact
+E07000208,Epsom and Ewell,306,exact
+E07000209,Guildford,307,exact
+E07000210,Mole Valley,308,exact
+E07000211,Reigate and Banstead,309,exact
+E07000212,Runnymede,310,exact
+E07000213,Spelthorne,311,exact
+E07000214,Surrey Heath,312,exact
+E07000215,Tandridge,313,exact
+E07000216,Waverley,314,exact
+E07000217,Woking,315,exact
+E07000218,North Warwickshire,317,exact
+E07000219,Nuneaton and Bedworth,318,exact
+E07000220,Rugby,319,exact
+E07000221,Stratford-on-Avon,320,exact
+E07000222,Warwick,321,exact
+E07000223,Adur,323,exact
+E07000224,Arun,324,exact
+E07000225,Chichester,325,exact
+E07000226,Crawley,326,exact
+E07000227,Horsham,327,exact
+E07000228,Mid Sussex,328,exact
+E07000229,Worthing,329,exact
+E07000234,Bromsgrove,145,exact
+E07000235,Malvern Hills,148,exact
+E07000236,Redditch,149,exact
+E07000237,Worcester,151,normalised
+E07000238,Wychavon,152,exact
+E07000239,Wyre Forest,153,exact
+E07000240,St Albans,160,normalised
+E07000241,Welwyn Hatfield,164,exact
+E07000242,East Hertfordshire,157,exact
+E07000243,Stevenage,161,exact
+E07000244,East Suffolk,302,exact
+E07000245,West Suffolk,298,exact
+E08000001,Bolton,403,exact
+E08000002,Bury,405,exact
+E08000003,Manchester,415,exact
+E08000004,Oldham,418,exact
+E08000005,Rochdale,419,exact
+E08000006,Salford,422,exact
+E08000007,Stockport,428,exact
+E08000008,Tameside,430,exact
+E08000009,Trafford,431,exact
+E08000010,Wigan,434,exact
+E08000011,Knowsley,412,exact
+E08000012,Liverpool,414,exact
+E08000013,St. Helens,421,manual
+E08000014,Sefton,424,exact
+E08000015,Wirral,435,exact
+E08000017,Doncaster,408,exact
+E08000018,Rotherham,420,exact
+E08000021,Newcastle upon Tyne,416,manual
+E08000022,North Tyneside,417,exact
+E08000023,South Tyneside,427,exact
+E08000024,Sunderland,429,exact
+E08000025,Birmingham,402,exact
+E08000026,Coventry,407,exact
+E08000027,Dudley,409,exact
+E08000028,Sandwell,423,exact
+E08000029,Solihull,426,exact
+E08000030,Walsall,433,exact
+E08000031,Wolverhampton,436,exact
+E08000032,Bradford,404,exact
+E08000033,Calderdale,406,exact
+E08000034,Kirklees,411,exact
+E08000035,Leeds,413,exact
+E08000036,Wakefield,432,exact
+E08000037,Gateshead,410,exact
+E08000038,Barnsley,401,exact
+E08000039,Sheffield,425,exact
+E09000001,City of London,508,manual
+E09000002,Barking and Dagenham,501,exact
+E09000003,Barnet,502,exact
+E09000004,Bexley,503,exact
+E09000005,Brent,504,exact
+E09000006,Bromley,505,exact
+E09000007,Camden,506,exact
+E09000008,Croydon,507,exact
+E09000009,Ealing,509,exact
+E09000010,Enfield,510,exact
+E09000011,Greenwich,511,exact
+E09000012,Hackney,512,exact
+E09000013,Hammersmith and Fulham,513,exact
+E09000014,Haringey,514,exact
+E09000015,Harrow,515,exact
+E09000016,Havering,516,exact
+E09000017,Hillingdon,517,exact
+E09000018,Hounslow,518,exact
+E09000019,Islington,519,exact
+E09000020,Kensington and Chelsea,520,exact
+E09000021,Kingston upon Thames,521,manual
+E09000022,Lambeth,522,exact
+E09000023,Lewisham,523,exact
+E09000024,Merton,524,exact
+E09000025,Newham,525,exact
+E09000026,Redbridge,526,exact
+E09000027,Richmond upon Thames,527,manual
+E09000028,Southwark,528,exact
+E09000029,Sutton,529,exact
+E09000030,Tower Hamlets,530,exact
+E09000031,Waltham Forest,531,exact
+E09000032,Wandsworth,532,exact
+E09000033,Westminster,533,exact

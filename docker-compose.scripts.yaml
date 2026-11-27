@@ -33,6 +33,14 @@ services:
     volumes:
       - ./data:/data
 
+  postcode-scraper:
+    build: ./docker_scripts/postcode_scraper
+    image: postcode-scraper:latest
+
+  staging-loader:
+    build: ./docker_scripts/staging_loader
+    image: staging-loader:latest
+
   # Add each new script the same way:
   # another-script:
   #   build: ./docker_scripts/another_script
